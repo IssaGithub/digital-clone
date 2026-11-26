@@ -1,6 +1,7 @@
 import struct
 from typing import Tuple
 
+import clone_store
 from livekit import rtc
 
 WIDTH = 320
@@ -27,13 +28,15 @@ def _disc(buf: bytearray, cx: int, cy: int, rx: int, ry: int, color: Tuple[int, 
 
 
 def face_frame(level: float) -> rtc.VideoFrame:
-    buf = bytearray(WIDTH * HEIGHT * 4)
-    _fill(buf, (28, 25, 21))
-    _disc(buf, 160, 118, 78, 96, (214, 176, 148))
-    _disc(buf, 128, 108, 10, 6, (40, 32, 28))
-    _disc(buf, 192, 108, 10, 6, (40, 32, 28))
-    open_px = 3 + int(max(0.0, min(level, 1.0)) * 28)
-    _disc(buf, 160, 168, 22, open_px, (120, 48, 52))
+    photo = clone_store.portrait()
+    buf = bytearray(photo) if photo else bytearray(WIDTH * HEIGHT * 4)
+    if not photo:
+        _fill(buf, (28, 25, 21))
+        _disc(buf, 160, 118, 78, 96, (214, 176, 148))
+        _disc(buf, 128, 108, 10, 6, (40, 32, 28))
+        _disc(buf, 192, 108, 10, 6, (40, 32, 28))
+    open_px = 3 + int(max(0.0, min(level, 1.0)) * 22)
+    _disc(buf, 160, 176, 18, open_px, (120, 48, 52))
     return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, buf)
 
 

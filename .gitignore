@@ -12,4 +12,5 @@ apps/call/.angular
 apps/call/dist
 apps/agent/.venv
 __pycache__
+data/clones
 *.pyc

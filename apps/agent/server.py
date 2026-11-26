@@ -9,12 +9,13 @@ from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from livekit import api, rtc
 
 import avatar
+import clone_store
 import oauth
 
 oauth.load_env_files()
@@ -58,15 +59,6 @@ def ollama_ready() -> bool:
 
 def local_tools_ready() -> bool:
     return bool(shutil.which("espeak-ng")) and ollama_ready()
-
-
-def heygen_view() -> dict:
-    return {
-        "provider": "heygen" if os.environ.get("HEYGEN_API_KEY") else "placeholder",
-        "connected": False,
-        "label": "HeyGen-Anschluss fehlt",
-        "detail": "Platzhalter, Mund folgt der Sprache",
-    }
 
 
 def speech_status():
@@ -133,7 +125,7 @@ def health():
 
 @app.get("/anschluesse")
 def anschluesse():
-    return {"speech": speech_status(), "heygen": heygen_view(), "livekit": PUBLIC_URL, "room": ROOM}
+    return {"speech": speech_status(), "clone": clone_store.view(), "livekit": PUBLIC_URL, "room": ROOM}
 
 
 @app.post("/token")
@@ -143,8 +135,22 @@ def token():
         "room": ROOM,
         "token": token_for("kunde"),
         "speech": speech_status(),
-        "heygen": heygen_view(),
+        "clone": clone_store.view(),
     }
+
+
+@app.post("/klon")
+async def create_clone(
+    photo: UploadFile = File(...),
+    voice: UploadFile = File(...),
+    video: UploadFile = File(...),
+):
+    try:
+        return await asyncio.to_thread(
+            clone_store.save, await photo.read(), await voice.read(), await video.read()
+        )
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def audio_bearer() -> str:
@@ -204,7 +210,10 @@ def synthesize(text: str) -> bytes:
     if local_mode() and shutil.which("espeak-ng"):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "hinweis.wav"
-            subprocess.check_call(["espeak-ng", "-v", "de", "-s", "140", "-w", str(target), text])
+            subprocess.check_call([
+                "espeak-ng", "-v", "de", "-s", "140", "-p", str(clone_store.pitch()),
+                "-w", str(target), text,
+            ])
             return target.read_bytes()
     speech_key = audio_bearer()
     if speech_key:
@@ -221,7 +230,10 @@ def synthesize(text: str) -> bytes:
         if shutil.which("say"):
             subprocess.check_call(["say", "-o", str(target), "--data-format=LEI16@48000", text])
         elif shutil.which("espeak-ng"):
-            subprocess.check_call(["espeak-ng", "-v", "de", "-s", "140", "-w", str(target), text])
+            subprocess.check_call([
+                "espeak-ng", "-v", "de", "-s", "140", "-p", str(clone_store.pitch()),
+                "-w", str(target), text,
+            ])
         else:
             return silence()
         return target.read_bytes()
@@ -244,7 +256,7 @@ avatar_source: Optional[rtc.VideoSource] = None
 
 async def ensure_avatar(room: rtc.Room):
     global avatar_source
-    if avatar_source is not None or os.environ.get("HEYGEN_API_KEY"):
+    if avatar_source is not None:
         return
     source = rtc.VideoSource(avatar.WIDTH, avatar.HEIGHT)
     track = rtc.LocalVideoTrack.create_video_track("avatar", source)
@@ -253,7 +265,7 @@ async def ensure_avatar(room: rtc.Room):
     )
     source.capture_frame(avatar.face_frame(0))
     avatar_source = source
-    print("Platzhalter-Avatar im Raum")
+    print("Klon-Gesicht im Raum")
 
 
 async def play(source: rtc.AudioSource, wav: bytes):

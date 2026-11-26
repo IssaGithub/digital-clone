@@ -11,8 +11,13 @@ type Speech = {
   login?: string | null;
   loginHint?: string;
 };
-type Heygen = { connected: boolean; label: string; detail: string };
-type TokenResponse = { url: string; token: string; speech: Speech; heygen: Heygen };
+type CloneProfile = {
+  ready: boolean;
+  label: string;
+  live: { face?: string; voice?: string };
+  raw: { movement?: string; voiceClone?: string };
+};
+type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneProfile };
 
 @Component({
   selector: "app-call",
@@ -33,12 +38,20 @@ type TokenResponse = { url: string; token: string; speech: Speech; heygen: Heyge
           <p>{{ speech()?.loginHint }}</p>
         }
       </section>
-      @if (heygen() && !heygen()!.connected) {
-        <section class="card">
-          <strong>HeyGen-Anschluss fehlt</strong>
-          <p class="warn">{{ heygen()?.detail }}</p>
-        </section>
-      }
+      <section class="card">
+        <strong>{{ cloneProfile()?.label || "Noch kein Klon" }}</strong>
+        @if (cloneProfile()?.ready) {
+          <p>Live: {{ cloneProfile()?.live?.face }}. {{ cloneProfile()?.live?.voice }}.</p>
+          <p class="warn">Roh: {{ cloneProfile()?.raw?.movement }}. {{ cloneProfile()?.raw?.voiceClone }}.</p>
+        }
+        <form (submit)="upload($event)">
+          <label>Foto <input name="photo" type="file" accept="image/*" required /></label>
+          <label>Stimmprobe <input name="voice" type="file" accept="audio/*" required /></label>
+          <label>Video <input name="video" type="file" accept="video/*" required /></label>
+          <button type="submit" [disabled]="uploading()">Klon anlegen</button>
+        </form>
+        <p>{{ uploadStatus() }}</p>
+      </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
       <video #remote autoplay playsinline></video>
@@ -47,7 +60,9 @@ type TokenResponse = { url: string; token: string; speech: Speech; heygen: Heyge
 })
 export class CallComponent {
   speech = signal<Speech | null>(null);
-  heygen = signal<Heygen | null>(null);
+  cloneProfile = signal<CloneProfile | null>(null);
+  uploading = signal(false);
+  uploadStatus = signal("");
   status = signal("Bereit.");
   busy = signal(false);
   private room?: Room;
@@ -60,9 +75,9 @@ export class CallComponent {
     this.api = origin.includes(":4010") ? origin : `${location.origin}/klon-agent`;
     fetch(`${this.api}/anschluesse`)
       .then((response) => response.json())
-      .then((body: { speech: Speech; heygen?: Heygen }) => {
+      .then((body: { speech: Speech; clone?: CloneProfile }) => {
         this.speech.set(body.speech);
-        if (body.heygen) this.heygen.set(body.heygen);
+        if (body.clone) this.cloneProfile.set(body.clone);
         this.loginHref = body.speech.login ? `${this.api}${body.speech.login}` : "";
       })
       .catch(() => undefined);
@@ -72,13 +87,31 @@ export class CallComponent {
 
   private api: string;
 
+  async upload(event: Event) {
+    event.preventDefault();
+    const form = event.target as HTMLFormElement;
+    const data = new FormData(form);
+    this.uploading.set(true);
+    this.uploadStatus.set("Speichere Foto, Stimme und Video…");
+    try {
+      const response = await fetch(`${this.api}/klon`, { method: "POST", body: data });
+      if (!response.ok) throw new Error("Upload abgelehnt");
+      this.cloneProfile.set((await response.json()) as CloneProfile);
+      this.uploadStatus.set("Klon gespeichert.");
+      form.reset();
+    } catch {
+      this.uploadStatus.set("Der Klon konnte nicht gespeichert werden.");
+    }
+    this.uploading.set(false);
+  }
+
   async join() {
     this.busy.set(true);
     this.status.set("Verbinde mit LiveKit…");
     const response = await fetch(`${this.api}/token`, { method: "POST" });
     const body = (await response.json()) as TokenResponse;
     this.speech.set(body.speech);
-    this.heygen.set(body.heygen);
+    this.cloneProfile.set(body.clone);
     const room = new Room();
     this.room = room;
     room.on(RoomEvent.TrackSubscribed, (track) => {
