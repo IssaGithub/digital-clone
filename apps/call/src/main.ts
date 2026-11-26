@@ -11,7 +11,8 @@ type Speech = {
   login?: string | null;
   loginHint?: string;
 };
-type TokenResponse = { url: string; token: string; speech: Speech };
+type Heygen = { connected: boolean; label: string; detail: string };
+type TokenResponse = { url: string; token: string; speech: Speech; heygen: Heygen };
 
 @Component({
   selector: "app-call",
@@ -32,6 +33,12 @@ type TokenResponse = { url: string; token: string; speech: Speech };
           <p>{{ speech()?.loginHint }}</p>
         }
       </section>
+      @if (heygen() && !heygen()!.connected) {
+        <section class="card">
+          <strong>HeyGen-Anschluss fehlt</strong>
+          <p class="warn">{{ heygen()?.detail }}</p>
+        </section>
+      }
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
       <video #remote autoplay playsinline></video>
@@ -40,6 +47,7 @@ type TokenResponse = { url: string; token: string; speech: Speech };
 })
 export class CallComponent {
   speech = signal<Speech | null>(null);
+  heygen = signal<Heygen | null>(null);
   status = signal("Bereit.");
   busy = signal(false);
   private room?: Room;
@@ -52,8 +60,9 @@ export class CallComponent {
     this.api = origin.includes(":4010") ? origin : `${location.origin}/klon-agent`;
     fetch(`${this.api}/anschluesse`)
       .then((response) => response.json())
-      .then((body: { speech: Speech }) => {
+      .then((body: { speech: Speech; heygen?: Heygen }) => {
         this.speech.set(body.speech);
+        if (body.heygen) this.heygen.set(body.heygen);
         this.loginHref = body.speech.login ? `${this.api}${body.speech.login}` : "";
       })
       .catch(() => undefined);
@@ -69,6 +78,7 @@ export class CallComponent {
     const response = await fetch(`${this.api}/token`, { method: "POST" });
     const body = (await response.json()) as TokenResponse;
     this.speech.set(body.speech);
+    this.heygen.set(body.heygen);
     const room = new Room();
     this.room = room;
     room.on(RoomEvent.TrackSubscribed, (track) => {
@@ -76,6 +86,11 @@ export class CallComponent {
         const element = track.attach();
         if (element instanceof HTMLVideoElement) {
           element.autoplay = true;
+          element.playsInline = true;
+          element.style.width = "100%";
+          element.style.minHeight = "240px";
+          element.style.background = "#111";
+          element.style.borderRadius = "12px";
           document.querySelector("video")?.replaceWith(element);
         } else {
           element.autoplay = true;

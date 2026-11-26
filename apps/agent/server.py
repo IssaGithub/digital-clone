@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Optional
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from livekit import api, rtc
 
+import avatar
 import oauth
 
 oauth.load_env_files()
@@ -56,6 +58,15 @@ def ollama_ready() -> bool:
 
 def local_tools_ready() -> bool:
     return bool(shutil.which("espeak-ng")) and ollama_ready()
+
+
+def heygen_view() -> dict:
+    return {
+        "provider": "heygen" if os.environ.get("HEYGEN_API_KEY") else "placeholder",
+        "connected": False,
+        "label": "HeyGen-Anschluss fehlt",
+        "detail": "Platzhalter, Mund folgt der Sprache",
+    }
 
 
 def speech_status():
@@ -122,12 +133,18 @@ def health():
 
 @app.get("/anschluesse")
 def anschluesse():
-    return {"speech": speech_status(), "livekit": PUBLIC_URL, "room": ROOM}
+    return {"speech": speech_status(), "heygen": heygen_view(), "livekit": PUBLIC_URL, "room": ROOM}
 
 
 @app.post("/token")
 def token():
-    return {"url": PUBLIC_URL, "room": ROOM, "token": token_for("kunde"), "speech": speech_status()}
+    return {
+        "url": PUBLIC_URL,
+        "room": ROOM,
+        "token": token_for("kunde"),
+        "speech": speech_status(),
+        "heygen": heygen_view(),
+    }
 
 
 def audio_bearer() -> str:
@@ -222,6 +239,23 @@ def silence() -> bytes:
     return data
 
 
+avatar_source: Optional[rtc.VideoSource] = None
+
+
+async def ensure_avatar(room: rtc.Room):
+    global avatar_source
+    if avatar_source is not None or os.environ.get("HEYGEN_API_KEY"):
+        return
+    source = rtc.VideoSource(avatar.WIDTH, avatar.HEIGHT)
+    track = rtc.LocalVideoTrack.create_video_track("avatar", source)
+    await room.local_participant.publish_track(
+        track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
+    )
+    source.capture_frame(avatar.face_frame(0))
+    avatar_source = source
+    print("Platzhalter-Avatar im Raum")
+
+
 async def play(source: rtc.AudioSource, wav: bytes):
     raw = tempfile.SpooledTemporaryFile()
     raw.write(wav)
@@ -239,7 +273,11 @@ async def play(source: rtc.AudioSource, wav: bytes):
             continue
         frame = rtc.AudioFrame(piece, rate, channels, samples)
         await source.capture_frame(frame)
+        if avatar_source is not None:
+            avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece)))
         await asyncio.sleep(samples / rate)
+    if avatar_source is not None:
+        avatar_source.capture_frame(avatar.face_frame(0))
 
 
 async def agent_loop():
@@ -258,6 +296,7 @@ async def agent_loop():
         try:
             await room.connect(URL, token_for("klon"))
             print(f"Agent im Raum {ROOM}")
+            await ensure_avatar(room)
             if local_mode() and not warmed:
                 warmed = True
                 asyncio.create_task(asyncio.to_thread(
