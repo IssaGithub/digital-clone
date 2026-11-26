@@ -44,17 +44,16 @@ type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneP
           <p>Live: {{ cloneProfile()?.live?.face }}. {{ cloneProfile()?.live?.voice }}.</p>
           <p class="warn">Roh: {{ cloneProfile()?.raw?.movement }}. {{ cloneProfile()?.raw?.voiceClone }}.</p>
         }
-        <form (submit)="upload($event)">
-          <label>Foto <input name="photo" type="file" accept="image/*" required /></label>
-          <label>Stimmprobe <input name="voice" type="file" accept="audio/*" required /></label>
-          <label>Video <input name="video" type="file" accept="video/*" required /></label>
-          <button type="submit" [disabled]="uploading()">Klon anlegen</button>
-        </form>
+        <video class="preview" autoplay muted playsinline></video>
+        <button type="button" (click)="takePhoto()" [disabled]="uploading()">Foto machen</button>
+        <button type="button" (click)="recordVoice()" [disabled]="uploading()">Stimme aufnehmen</button>
+        <button type="button" (click)="recordVideo()" [disabled]="uploading()">Video aufnehmen</button>
+        <button type="button" (click)="saveClone()" [disabled]="uploading() || !photoBlob || !voiceBlob || !videoBlob">Klon anlegen</button>
         <p>{{ uploadStatus() }}</p>
       </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
-      <video #remote autoplay playsinline></video>
+      <video class="call" autoplay playsinline></video>
     </main>
   `,
 })
@@ -87,10 +86,115 @@ export class CallComponent {
 
   private api: string;
 
-  async upload(event: Event) {
-    event.preventDefault();
-    const form = event.target as HTMLFormElement;
-    const data = new FormData(form);
+  photoBlob: Blob | null = null;
+  voiceBlob: Blob | null = null;
+  videoBlob: Blob | null = null;
+  private voiceRecorder?: MediaRecorder;
+  private videoRecorder?: MediaRecorder;
+
+  private preview(): HTMLVideoElement {
+    return document.querySelector("video.preview") as HTMLVideoElement;
+  }
+
+  private async media(video: boolean, audio: boolean): Promise<MediaStream> {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Kamera und Mikrofon gehen hier nur über https");
+    }
+    return navigator.mediaDevices.getUserMedia({
+      video: video ? { facingMode: "user" } : false,
+      audio,
+    });
+  }
+
+  private stop(stream: MediaStream) {
+    stream.getTracks().forEach((track) => track.stop());
+    const preview = this.preview();
+    if (preview) preview.srcObject = null;
+  }
+
+  async takePhoto() {
+    this.uploadStatus.set("Kamera…");
+    try {
+      const stream = await this.media(true, false);
+      const preview = this.preview();
+      preview.srcObject = stream;
+      await preview.play();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const canvas = document.createElement("canvas");
+      canvas.width = preview.videoWidth || 640;
+      canvas.height = preview.videoHeight || 480;
+      canvas.getContext("2d")?.drawImage(preview, 0, 0);
+      this.photoBlob = await new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.9));
+      this.stop(stream);
+      this.uploadStatus.set(this.photoBlob ? "Foto liegt bereit." : "Foto fehlgeschlagen.");
+    } catch (error) {
+      this.uploadStatus.set(error instanceof Error ? error.message : "Foto fehlgeschlagen.");
+    }
+  }
+
+  async recordVoice() {
+    if (this.voiceRecorder?.state === "recording") {
+      this.voiceRecorder.stop();
+      return;
+    }
+    try {
+      const stream = await this.media(false, true);
+      const chunks: Blob[] = [];
+      const recorder = new MediaRecorder(stream);
+      this.voiceRecorder = recorder;
+      recorder.ondataavailable = (event) => chunks.push(event.data);
+      recorder.onstop = () => {
+        this.voiceBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        this.stop(stream);
+        this.voiceRecorder = undefined;
+        this.uploadStatus.set("Stimmprobe liegt bereit.");
+      };
+      recorder.start();
+      this.uploadStatus.set("Stimme läuft, nochmal tippen stoppt.");
+      setTimeout(() => {
+        if (recorder.state === "recording") recorder.stop();
+      }, 6000);
+    } catch (error) {
+      this.uploadStatus.set(error instanceof Error ? error.message : "Stimme fehlgeschlagen.");
+    }
+  }
+
+  async recordVideo() {
+    if (this.videoRecorder?.state === "recording") {
+      this.videoRecorder.stop();
+      return;
+    }
+    try {
+      const stream = await this.media(true, true);
+      const preview = this.preview();
+      preview.srcObject = stream;
+      await preview.play();
+      const chunks: Blob[] = [];
+      const recorder = new MediaRecorder(stream);
+      this.videoRecorder = recorder;
+      recorder.ondataavailable = (event) => chunks.push(event.data);
+      recorder.onstop = () => {
+        this.videoBlob = new Blob(chunks, { type: recorder.mimeType || "video/webm" });
+        this.stop(stream);
+        this.videoRecorder = undefined;
+        this.uploadStatus.set("Video liegt bereit.");
+      };
+      recorder.start();
+      this.uploadStatus.set("Video läuft, nochmal tippen stoppt.");
+      setTimeout(() => {
+        if (recorder.state === "recording") recorder.stop();
+      }, 8000);
+    } catch (error) {
+      this.uploadStatus.set(error instanceof Error ? error.message : "Video fehlgeschlagen.");
+    }
+  }
+
+  async saveClone() {
+    if (!this.photoBlob || !this.voiceBlob || !this.videoBlob) return;
+    const data = new FormData();
+    data.append("photo", this.photoBlob, "foto.jpg");
+    data.append("voice", this.voiceBlob, "stimme.webm");
+    data.append("video", this.videoBlob, "video.webm");
     this.uploading.set(true);
     this.uploadStatus.set("Speichere Foto, Stimme und Video…");
     try {
@@ -98,7 +202,6 @@ export class CallComponent {
       if (!response.ok) throw new Error("Upload abgelehnt");
       this.cloneProfile.set((await response.json()) as CloneProfile);
       this.uploadStatus.set("Klon gespeichert.");
-      form.reset();
     } catch {
       this.uploadStatus.set("Der Klon konnte nicht gespeichert werden.");
     }

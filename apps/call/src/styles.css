@@ -7,3 +7,4 @@ label { display: block; margin: 8px 0; }
 input { display: block; margin-top: 4px; }
 .warn { color: #8a5a12; }
 video { width: 100%; background: #111; border-radius: 12px; min-height: 240px; }
+video.preview { max-height: 240px; margin-bottom: 12px; }
