@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import { parseInviteeCreated, verifyCalendlySignature } from "./calendly.js";
+import { parseRpcMessage, readToolRequest, toolAlias } from "./mcp.js";
 import { decryptJson, deriveUserKey, encryptJson } from "./crypto.js";
 import { buildQuotationBody, canFinalize, linesFromModel, linesFromTranscript } from "./offers.js";
 
@@ -89,6 +90,17 @@ test("Preise kommen nur aus der Preisliste, unklare Posten blockieren", () => {
   assert.equal(body.lineItems.length, 1);
   assert.equal(body.lineItems[0].name, "Workshop");
   assert.equal(body.lineItems[0].unitPrice.netAmount, 1200);
+});
+
+test("MCP-Antwort und Werkzeugaufruf lassen sich lesen", () => {
+  const sse = 'event: message\ndata: {"jsonrpc":"2.0","id":"tools/list","result":{"tools":[]}}\n';
+  assert.deepEqual(parseRpcMessage(sse), { jsonrpc: "2.0", id: "tools/list", result: { tools: [] } });
+  assert.equal(toolAlias("Lager", "bestand-prüfen"), "lager__bestand_pr_fen");
+  assert.deepEqual(readToolRequest('TOOL {"name":"lager__bestand","arguments":{"sku":"1"}}'), {
+    name: "lager__bestand",
+    arguments: { sku: "1" },
+  });
+  assert.equal(readToolRequest("Guten Tag."), null);
 });
 
 test("Secrets sind pro Nutzer-Schlüssel nicht mit einem fremden Salz lesbar", () => {

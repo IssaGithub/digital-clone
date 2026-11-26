@@ -112,6 +112,7 @@ model Clone {
   autoSendOffers       Boolean         @default(false)
   preferredMail        PreferredMail   @default(auto)
   calendlyEventTypeUri String          @default("")
+  calendlySchedulingUrl String         @default("")
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   priceItems           PriceItem[]
@@ -119,6 +120,21 @@ model Clone {
   offers               Offer[]
   reels                Reel[]
   plannedActions       PlannedAction[]
+  mcpServers           McpServer[]
+}
+
+model McpServer {
+  id               String   @id @default(cuid())
+  cloneId          String
+  clone            Clone    @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  name             String
+  url              String
+  encryptedHeaders String   @default("")
+  reachable        Boolean  @default(false)
+  lastError        String   @default("")
+  toolNames        String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model PriceItem {

@@ -58,6 +58,7 @@ export async function createClone(form: FormData) {
       autoSendOffers: form.get("autoSendOffers") === "on",
       preferredMail: (text(form, "preferredMail") || "auto") as "auto" | "gmail" | "outlook",
       calendlyEventTypeUri: text(form, "calendlyEventTypeUri"),
+      calendlySchedulingUrl: text(form, "calendlySchedulingUrl"),
       plannedActions: {
         create: [
           { type: "quotation" satisfies PlannedActionType, enabled: true, note: "Angebot nach dem Call." },
@@ -71,7 +72,7 @@ export async function createClone(form: FormData) {
       },
     },
   });
-  redirect(`/app/clones/${clone.id}`);
+  redirect(`/klon/${clone.id}`);
 }
 
 export async function updateClone(form: FormData) {
@@ -91,9 +92,10 @@ export async function updateClone(form: FormData) {
       autoSendOffers: form.get("autoSendOffers") === "on",
       preferredMail: (text(form, "preferredMail") || "auto") as "auto" | "gmail" | "outlook",
       calendlyEventTypeUri: text(form, "calendlyEventTypeUri"),
+      calendlySchedulingUrl: text(form, "calendlySchedulingUrl"),
     },
   });
-  revalidatePath(`/app/clones/${id}`);
+  revalidatePath(`/klon/${id}`);
 }
 
 export async function addPrice(form: FormData) {
@@ -114,7 +116,7 @@ export async function addPrice(form: FormData) {
       currency: "EUR",
     },
   });
-  revalidatePath(`/app/clones/${cloneId}`);
+  revalidatePath(`/klon/${cloneId}`);
 }
 
 export async function deactivatePrice(form: FormData) {
@@ -123,7 +125,7 @@ export async function deactivatePrice(form: FormData) {
   const item = await prisma.priceItem.findFirst({ where: { id, clone: { userId: user.id } } });
   if (!item) return;
   await prisma.priceItem.update({ where: { id }, data: { active: false } });
-  revalidatePath(`/app/clones/${item.cloneId}`);
+  revalidatePath(`/klon/${item.cloneId}`);
 }
 
 export async function saveConnection(form: FormData) {
@@ -296,4 +298,59 @@ export async function createReel(form: FormData) {
   });
   await enqueue("render_reel", { reelId: reel.id });
   redirect(`/app/reels/${reel.id}`);
+}
+
+function headerBag(token: string, extra: string) {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = token.toLowerCase().startsWith("bearer ") ? token : `Bearer ${token}`;
+  for (const line of extra.split("\n")) {
+    const index = line.indexOf(":");
+    if (index < 1) continue;
+    const name = line.slice(0, index).trim();
+    const value = line.slice(index + 1).trim();
+    if (name && value) headers[name] = value;
+  }
+  return headers;
+}
+
+export async function addMcpServer(form: FormData) {
+  const user = await requireUser();
+  const cloneId = text(form, "cloneId");
+  const clone = await prisma.clone.findFirst({ where: { id: cloneId, userId: user.id } });
+  const name = text(form, "name");
+  const url = text(form, "url");
+  if (!clone || !name || !url) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return;
+  const headers = headerBag(text(form, "token"), text(form, "headers"));
+  let encryptedHeaders = "";
+  if (Object.keys(headers).length && process.env.ENCRYPTION_KEY) {
+    const { key } = await userKey(user.id);
+    encryptedHeaders = encryptJson(key, { headers });
+  }
+  await prisma.mcpServer.create({
+    data: {
+      cloneId,
+      name,
+      url,
+      encryptedHeaders,
+      reachable: false,
+      lastError: Object.keys(headers).length && !process.env.ENCRYPTION_KEY ? "ENCRYPTION_KEY fehlt, Token wurde nicht gespeichert." : "",
+    },
+  });
+  revalidatePath(`/klon/${cloneId}`);
+}
+
+export async function removeMcpServer(form: FormData) {
+  const user = await requireUser();
+  const id = text(form, "id");
+  const server = await prisma.mcpServer.findFirst({ where: { id, clone: { userId: user.id } } });
+  if (!server) return;
+  await prisma.mcpServer.delete({ where: { id } });
+  revalidatePath(`/klon/${server.cloneId}`);
 }

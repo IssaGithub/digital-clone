@@ -8,3 +8,8 @@ storage
 packages/db/src/generated
 apps/web/tsconfig.tsbuildinfo
 .DS_Store
+apps/call/.angular
+apps/call/dist
+apps/agent/.venv
+__pycache__
+*.pyc

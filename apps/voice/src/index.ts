@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import { appUrl, cloneSystemPrompt, loadEnv, pcm16ToWav, recallOutputAudio, transcribeWav, voiceSharedSecret, elevenLabsMp3, llmComplete } from "@klon/core";
+import { appUrl, callMcpTool, cloneSystemPrompt, loadEnv, pcm16ToWav, readToolRequest, recallOutputAudio, toolCatalogPrompt, transcribeWav, voiceSharedSecret, elevenLabsMp3, llmComplete } from "@klon/core";
 import { prisma } from "@klon/db";
-import { enqueue, readSecrets } from "@klon/domain";
+import { enqueue, loadCloneMcp, readSecrets } from "@klon/domain";
 import { WebSocketServer, type RawData } from "ws";
 
 loadEnv();
@@ -97,17 +97,40 @@ async function replyTo(botId: string, utterance: string) {
     if (!fresh) return;
     const clone = fresh.booking.clone;
     const llm = await readSecrets(clone.userId, "llm");
+    const mcp = await loadCloneMcp(clone.id);
+    const basePrompt = cloneSystemPrompt({
+      name: clone.name,
+      knowledge: clone.knowledge,
+      items: clone.priceItems.filter((item) => item.active),
+    });
     let answer = "Ich habe dich gehört. Ohne Sprachmodell kann ich den Inhalt nicht beantworten.";
     if (llm?.apiKey) {
-      answer = await llmComplete(
-        llm,
-        cloneSystemPrompt({
-          name: clone.name,
-          knowledge: clone.knowledge,
-          items: clone.priceItems.filter((item) => item.active),
-        }),
-        fresh.transcript,
-      );
+      let context = fresh.transcript;
+      const system = `${basePrompt}${toolCatalogPrompt(mcp.tools)}`;
+      for (let step = 0; step < 3; step += 1) {
+        const raw = await llmComplete(llm, system, context);
+        const request = readToolRequest(raw);
+        if (!request) {
+          answer = raw;
+          break;
+        }
+        const tool = mcp.tools.find((item) => item.alias === request.name);
+        const endpoint = tool ? mcp.endpoints.get(tool.serverName) : undefined;
+        let result = "Werkzeug ist nicht verbunden.";
+        if (tool && endpoint) {
+          try {
+            result = await callMcpTool(endpoint, tool.name, request.arguments);
+          } catch (error) {
+            result = error instanceof Error ? error.message : "MCP-Server nicht erreichbar";
+          }
+        }
+        const note = `Werkzeug ${request.name} mit ${JSON.stringify(request.arguments)}: ${result}`;
+        context = `${context}\n${note}`;
+        await appendTranscript(botId, "Werkzeug", note);
+        if (step === 2) {
+          answer = await llmComplete(llm, basePrompt, `${context}\nAntworte jetzt nur gesprochen, ohne TOOL-Zeile.`);
+        }
+      }
     }
     await speak(botId, answer.slice(0, 800), false);
   } catch (error) {

@@ -15,6 +15,7 @@ export type SecretBag = {
   baseUrl?: string;
   model?: string;
   accountEmail?: string;
+  headers?: Record<string, string>;
 };
 
 export function newUserSalt() {

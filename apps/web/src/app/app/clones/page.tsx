@@ -21,7 +21,7 @@ export default async function ClonesPage() {
       {clones.length === 0 ? <p>Noch keiner. Lege Stimme, Wissen und Preise an.</p> : null}
       <div className="grid">
         {clones.map((clone) => (
-          <Link key={clone.id} className="card" href={`/app/clones/${clone.id}`}>
+          <Link key={clone.id} className="card" href={`/klon/${clone.id}`}>
             <h2>{clone.name}</h2>
             <p className="muted">{clone._count.priceItems} Preispositionen</p>
             <p>{clone.autoSendOffers ? "Automatischer Versand an" : "Versand nur nach Freigabe"}</p>

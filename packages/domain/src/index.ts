@@ -20,7 +20,10 @@ import {
   lexwareQuotationPdf,
   linesFromModel,
   linesFromTranscript,
+  listMcpTools,
   llmComplete,
+  type McpEndpoint,
+  type McpTool,
   parseReelCopy,
   recallCreateBot,
   refreshGoogleToken,
@@ -486,6 +489,44 @@ export async function processNextJob() {
     }
   }
   return true;
+}
+
+export async function loadCloneMcp(cloneId: string): Promise<{
+  tools: McpTool[];
+  endpoints: Map<string, McpEndpoint>;
+}> {
+  const clone = await prisma.clone.findUnique({
+    where: { id: cloneId },
+    include: { mcpServers: true },
+  });
+  const tools: McpTool[] = [];
+  const endpoints = new Map<string, McpEndpoint>();
+  if (!clone) return { tools, endpoints };
+  const key = encryptionKey() ? (await userKey(clone.userId)).key : null;
+  for (const server of clone.mcpServers) {
+    const headers =
+      key && server.encryptedHeaders ? decryptJson(key, server.encryptedHeaders).headers || {} : {};
+    const endpoint = { name: server.name, url: server.url, headers };
+    endpoints.set(server.name, endpoint);
+    try {
+      const listed = await listMcpTools(endpoint);
+      tools.push(...listed);
+      await prisma.mcpServer.update({
+        where: { id: server.id },
+        data: { reachable: true, lastError: "", toolNames: listed.map((tool) => tool.name).join(", ") },
+      });
+    } catch (error) {
+      await prisma.mcpServer.update({
+        where: { id: server.id },
+        data: {
+          reachable: false,
+          toolNames: "",
+          lastError: error instanceof Error ? error.message : "MCP-Server nicht erreichbar",
+        },
+      });
+    }
+  }
+  return { tools, endpoints };
 }
 
 export function webhookUrl(userId: string) {

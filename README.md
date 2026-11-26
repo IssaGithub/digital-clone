@@ -2,6 +2,10 @@
 
 Dashboard, Calendly-Webhook, Recall-Bot und ein eigener Voice-Dienst. Angebote bleiben Entwurf, bis sie im Dashboard freigegeben werden. Reels werden in der App heruntergeladen.
 
+Öffentliche Seite eines Klons: `/klon/[id]`. Oben konfiguriert der eingeloggte Unternehmer Name, Wissen, Stimme, Preise, MCP-Server, Video-Briefing und Calendly. Darunter bucht jeder den Call. `github_project` bleibt nur im Datenmodell.
+
+Videocall über LiveKit statt Recall: Angular auf `http://127.0.0.1:4200`, Agent auf `http://127.0.0.1:4010`, LiveKit auf `ws://127.0.0.1:7880`. Ohne `OPENAI_API_KEY` bleibt OpenAI Sprache als fehlender Anschluss sichtbar. Der Agent spricht den Klon-Hinweis dann mit der Platzhalterstimme. Das Next-Dashboard bleibt, bis der neue Call läuft.
+
 ## Start
 
 Postgres, zum Beispiel über `docker compose up -d`.

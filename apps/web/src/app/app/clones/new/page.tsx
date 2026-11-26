@@ -30,6 +30,10 @@ export default function NewClonePage() {
         <textarea name="disclosureText" defaultValue={DEFAULT_DISCLOSURE} />
       </label>
       <label>
+        Calendly-Link für Kunden
+        <input name="calendlySchedulingUrl" placeholder="https://calendly.com/..." />
+      </label>
+      <label>
         Calendly-Event-Typ-URI
         <input name="calendlyEventTypeUri" placeholder="optional, sonst der einzige Klon" />
       </label>
