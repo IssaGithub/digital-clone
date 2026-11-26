@@ -283,7 +283,19 @@ async def ensure_avatar(room: rtc.Room):
     )
     source.capture_frame(avatar.face_frame(0))
     avatar_source = source
+    asyncio.create_task(keep_face_alive())
     print("Klon-Gesicht im Raum")
+
+
+speaking = False
+
+
+async def keep_face_alive():
+    while avatar_source is not None:
+        if not speaking:
+            first = (clone_store.shifts() or [[0, 0]])[0]
+            avatar_source.capture_frame(avatar.face_frame(0, first))
+        await asyncio.sleep(1)
 
 
 async def play(source: rtc.AudioSource, wav: bytes):
@@ -296,6 +308,8 @@ async def play(source: rtc.AudioSource, wav: bytes):
         pcm = handle.readframes(handle.getnframes())
     width = 2 * channels
     chunk = max(width, rate // 50 * width)
+    global speaking
+    speaking = True
     motion = clone_store.shifts()
     shown = -1
     for start in range(0, len(pcm), chunk):
@@ -314,6 +328,7 @@ async def play(source: rtc.AudioSource, wav: bytes):
             avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece)))
             shown = 0
         await asyncio.sleep(samples / rate)
+    speaking = False
     if avatar_source is not None:
         avatar_source.capture_frame(avatar.face_frame(0))
 

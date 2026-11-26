@@ -27,6 +27,14 @@ type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneP
       <h1>Videocall</h1>
       <p>LiveKit-Raum: klon</p>
       <p>Der Klon tritt über LiveKit bei und spricht zuerst den Hinweis, dass ein digitaler Klon spricht.</p>
+      <section class="card stage">
+        <strong>Klon</strong>
+        <img class="face" alt="Klon" [attr.src]="faceSrc() || null" [hidden]="!faceSrc()" (error)="faceFailed()" />
+        @if (!faceSrc()) {
+          <p class="warn">Noch kein Foto des Klons gespeichert. Foto, Stimme und Video aufnehmen und Klon anlegen.</p>
+        }
+        <audio class="ansage"></audio>
+      </section>
       <section class="card">
         <strong>{{ speech()?.label || "OpenAI Sprache" }}</strong>
         <p [class.warn]="!speech()?.connected">
@@ -54,8 +62,6 @@ type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneP
       </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
-      <img class="face" alt="Klon" />
-      <audio class="ansage"></audio>
       <video class="call" autoplay playsinline></video>
     </main>
   `,
@@ -65,6 +71,8 @@ export class CallComponent {
   cloneProfile = signal<CloneProfile | null>(null);
   uploading = signal(false);
   uploadStatus = signal("");
+  faceSrc = signal("");
+  private ansageOk = false;
   status = signal("Bereit.");
   busy = signal(false);
   private room?: Room;
@@ -80,9 +88,18 @@ export class CallComponent {
       .then((body: { speech: Speech; clone?: CloneProfile }) => {
         this.speech.set(body.speech);
         if (body.clone) this.cloneProfile.set(body.clone);
+        if (body.clone?.ready) this.showFace();
         this.loginHref = body.speech.login ? `${this.api}${body.speech.login}` : "";
       })
       .catch(() => undefined);
+  }
+
+  private showFace() {
+    this.faceSrc.set(`${this.api}/klon/bild?t=${Date.now()}`);
+  }
+
+  faceFailed() {
+    this.faceSrc.set("");
   }
 
   loginHref = "";
@@ -204,6 +221,7 @@ export class CallComponent {
       const response = await fetch(`${this.api}/klon`, { method: "POST", body: data });
       if (!response.ok) throw new Error("Upload abgelehnt");
       this.cloneProfile.set((await response.json()) as CloneProfile);
+      this.showFace();
       this.uploadStatus.set("Klon gespeichert.");
     } catch {
       this.uploadStatus.set("Der Klon konnte nicht gespeichert werden.");
@@ -211,27 +229,44 @@ export class CallComponent {
     this.uploading.set(false);
   }
 
-  async join() {
-    this.busy.set(true);
-    this.status.set("Verbinde mit LiveKit…");
-    const response = await fetch(`${this.api}/token`, { method: "POST" });
-    const body = (await response.json()) as TokenResponse;
-    this.speech.set(body.speech);
-    this.cloneProfile.set(body.clone);
+  private playAnsage() {
     const face = document.querySelector("img.face") as HTMLImageElement;
     const ansage = document.querySelector("audio.ansage") as HTMLAudioElement;
-    face.src = `${this.api}/klon/bild?t=${Date.now()}`;
+    const shifts = this.cloneProfile()?.shifts || [];
+    this.showFace();
     ansage.src = `${this.api}/klon/ansage?t=${Date.now()}`;
-    const shifts = body.clone?.shifts || [];
     ansage.ontimeupdate = () => {
       if (!shifts.length || !ansage.duration) return;
       const point = shifts[Math.min(shifts.length - 1, Math.floor((ansage.currentTime / ansage.duration) * shifts.length))];
       face.style.transform = `translate(${point[0]}px, ${point[1]}px)`;
     };
-    await ansage.play();
+    ansage.onended = () => {
+      face.style.transform = "translate(0px, 0px)";
+    };
+    ansage
+      .play()
+      .then(() => {
+        this.ansageOk = true;
+      })
+      .catch(() => {
+        this.ansageOk = false;
+        this.status.set("Ton blockiert: Wiedergabe im Browser erlauben und nochmal starten.");
+      });
+  }
+
+  async join() {
+    this.busy.set(true);
+    this.ansageOk = false;
+    this.playAnsage();
+    this.status.set("Verbinde mit LiveKit…");
+    const response = await fetch(`${this.api}/token`, { method: "POST" });
+    const body = (await response.json()) as TokenResponse;
+    this.speech.set(body.speech);
+    this.cloneProfile.set(body.clone);
     const room = new Room();
     this.room = room;
     room.on(RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === Track.Kind.Audio && this.ansageOk) return;
       if (track.kind === Track.Kind.Audio || track.kind === Track.Kind.Video) {
         const element = track.attach();
         if (element instanceof HTMLVideoElement) {
@@ -256,10 +291,10 @@ export class CallComponent {
       : body.url;
     try {
       await room.connect(url, body.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
       this.status.set("Im Raum. Der Klon spricht den Hinweis.");
+      await room.localParticipant.setMicrophoneEnabled(true).catch(() => undefined);
     } catch {
-      this.status.set("Foto und Ansage laufen. Der LiveKit-Medienweg ist von außen zu.");
+      this.status.set("Foto und Ansage laufen. Der LiveKit-Raum war nicht erreichbar.");
     }
     this.busy.set(false);
   }
