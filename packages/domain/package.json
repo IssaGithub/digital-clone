@@ -1,0 +1,17 @@
+{
+  "name": "@klon/domain",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@klon/core": "*",
+    "@klon/db": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

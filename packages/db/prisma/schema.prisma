@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConnectionProvider {
+  calendly
+  lexware
+  google
+  microsoft
+  recall
+  elevenlabs
+  heygen
+  llm
+}
+
+enum MeetingLocationType {
+  google_conference
+  microsoft_teams
+  unknown
+}
+
+enum BookingStatus {
+  scheduled
+  bot_queued
+  live
+  ended
+  failed
+}
+
+enum CallStatus {
+  scheduled
+  joining
+  live
+  ended
+  failed
+}
+
+enum OfferStatus {
+  draft
+  approved
+  finalized
+  sent
+  failed
+}
+
+enum ReelStatus {
+  queued
+  scripting
+  rendering
+  ready
+  failed
+}
+
+enum JobType {
+  start_bot
+  draft_offer
+  render_reel
+}
+
+enum JobStatus {
+  pending
+  running
+  done
+  failed
+}
+
+/// github_project ist nur vorbereitet und wird nicht ausgeführt.
+enum PlannedActionType {
+  quotation
+  reel
+  github_project
+}
+
+enum MailChannel {
+  gmail
+  outlook
+  none
+}
+
+enum PreferredMail {
+  auto
+  gmail
+  outlook
+}
+
+model User {
+  id             String       @id @default(cuid())
+  email          String       @unique
+  name           String
+  encryptionSalt String
+  createdAt      DateTime     @default(now())
+  clones         Clone[]
+  connections    Connection[]
+}
+
+model Clone {
+  id                   String          @id @default(cuid())
+  userId               String
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                 String
+  voiceId              String          @default("")
+  heygenAvatarId       String          @default("")
+  heygenVoiceId        String          @default("")
+  knowledge            String          @default("")
+  disclosureText       String
+  autoSendOffers       Boolean         @default(false)
+  preferredMail        PreferredMail   @default(auto)
+  calendlyEventTypeUri String          @default("")
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  priceItems           PriceItem[]
+  bookings             Booking[]
+  offers               Offer[]
+  reels                Reel[]
+  plannedActions       PlannedAction[]
+}
+
+model PriceItem {
+  id             String  @id @default(cuid())
+  cloneId        String
+  clone          Clone   @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  name           String
+  description    String  @default("")
+  unit           String  @default("Stück")
+  unitPriceCents Int
+  taxPercent     Int     @default(19)
+  currency       String  @default("EUR")
+  active         Boolean @default(true)
+}
+
+model Connection {
+  id               String             @id @default(cuid())
+  userId           String
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider         ConnectionProvider
+  encryptedPayload String             @default("")
+  accountLabel     String             @default("")
+  connected        Boolean            @default(false)
+  updatedAt        DateTime           @updatedAt
+
+  @@unique([userId, provider])
+}
+
+model Booking {
+  id           String              @id @default(cuid())
+  cloneId      String
+  clone        Clone               @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  calendlyUri  String              @default("")
+  inviteeName  String
+  inviteeEmail String
+  startsAt     DateTime
+  joinUrl      String              @default("")
+  locationType MeetingLocationType @default(unknown)
+  status       BookingStatus       @default(scheduled)
+  rawEvent     Json?
+  createdAt    DateTime            @default(now())
+  callSession  CallSession?
+  offer        Offer?
+
+  @@index([cloneId, startsAt])
+}
+
+model CallSession {
+  id               String     @id @default(cuid())
+  bookingId        String     @unique
+  booking          Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  recallBotId      String     @default("")
+  status           CallStatus @default(scheduled)
+  transcript       String     @default("")
+  disclosurePlayed Boolean    @default(false)
+  lastError        String     @default("")
+  startedAt        DateTime?
+  endedAt          DateTime?
+  updatedAt        DateTime   @updatedAt
+}
+
+model Offer {
+  id                 String      @id @default(cuid())
+  cloneId            String
+  clone              Clone       @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  bookingId          String?     @unique
+  booking            Booking?    @relation(fields: [bookingId], references: [id])
+  status             OfferStatus @default(draft)
+  customerName       String
+  customerEmail      String
+  lines              Json
+  blockedReason      String      @default("")
+  lexwareQuotationId String      @default("")
+  lexwareFinalId     String      @default("")
+  pdfPath            String      @default("")
+  mailChannel        MailChannel @default(none)
+  sentTo             String      @default("")
+  lastError          String      @default("")
+  createdAt          DateTime    @default(now())
+  finalizedAt        DateTime?
+  sentAt             DateTime?
+}
+
+model Reel {
+  id            String     @id @default(cuid())
+  cloneId       String
+  clone         Clone      @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  briefing      String
+  script        String     @default("")
+  voiceText     String     @default("")
+  voiceAudioPath String    @default("")
+  status        ReelStatus @default(queued)
+  heygenVideoId String     @default("")
+  videoPath     String     @default("")
+  lastError     String     @default("")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model PlannedAction {
+  id      String            @id @default(cuid())
+  cloneId String
+  clone   Clone             @relation(fields: [cloneId], references: [id], onDelete: Cascade)
+  type    PlannedActionType
+  enabled Boolean           @default(false)
+  note    String            @default("")
+
+  @@unique([cloneId, type])
+}
+
+model QueueJob {
+  id        String    @id @default(cuid())
+  type      JobType
+  status    JobStatus @default(pending)
+  runAt     DateTime  @default(now())
+  payload   Json
+  attempts  Int       @default(0)
+  lastError String    @default("")
+  lockedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, runAt])
+}

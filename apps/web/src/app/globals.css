@@ -1,0 +1,55 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5e584f;
+  --line: #e4dccf;
+  --paper: #f6f1e8;
+  --card: #fffdf8;
+  --accent: #8c3a2f;
+  --ok: #1f6b45;
+  --warn: #8a5a12;
+  --bad: #8c2f2f;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+}
+a { color: inherit; }
+h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 560; letter-spacing: -0.02em; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
+.nav {
+  display: flex; gap: 18px; align-items: center; padding: 16px 20px;
+  border-bottom: 1px solid var(--line); background: #fffaf3;
+}
+.nav a { text-decoration: none; }
+.brand { font-family: Fraunces, Georgia, serif; margin-right: auto; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px;
+}
+.card h2, .card h3 { margin: 0 0 8px; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+label { display: grid; gap: 4px; font-size: 14px; margin-bottom: 10px; }
+input, textarea, select, button {
+  font: inherit; border-radius: 10px; border: 1px solid var(--line); padding: 8px 10px; background: white;
+}
+textarea { min-height: 90px; }
+button, .button {
+  background: var(--ink); color: white; text-decoration: none; cursor: pointer; border: 0;
+  display: inline-flex; align-items: center;
+}
+button.ghost, a.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.pill { font-size: 12px; border-radius: 999px; padding: 2px 8px; border: 1px solid var(--line); }
+.ok { color: var(--ok); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+pre { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.stack { display: grid; gap: 14px; }
+.hero { padding: 48px 0 20px; max-width: 720px; }

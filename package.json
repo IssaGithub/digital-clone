@@ -1,0 +1,24 @@
+{
+  "name": "klon-plattform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run db:generate",
+    "dev": "npm run dev -w @klon/web",
+    "dev:voice": "npm run dev -w @klon/voice",
+    "dev:worker": "npm run dev -w @klon/worker",
+    "db:generate": "npm run generate -w @klon/db",
+    "db:push": "npm run push -w @klon/db",
+    "typecheck": "npm run typecheck -w @klon/core && npm run typecheck -w @klon/db && npm run typecheck -w @klon/voice && npm run typecheck -w @klon/worker && npm run typecheck -w @klon/web",
+    "test": "npm run test -w @klon/core",
+    "smoke": "node --env-file=.env --import tsx scripts/smoke.mjs",
+    "env:init": "node scripts/init-env.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
