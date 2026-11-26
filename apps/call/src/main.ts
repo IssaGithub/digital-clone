@@ -15,6 +15,7 @@ type CloneProfile = {
   ready: boolean;
   label: string;
   live: { face?: string; voice?: string; movement?: string };
+  shifts?: number[][];
   raw: { movement?: string; voiceClone?: string };
 };
 type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneProfile };
@@ -53,6 +54,8 @@ type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneP
       </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
+      <img class="face" alt="Klon" />
+      <audio class="ansage"></audio>
       <video class="call" autoplay playsinline></video>
     </main>
   `,
@@ -215,6 +218,17 @@ export class CallComponent {
     const body = (await response.json()) as TokenResponse;
     this.speech.set(body.speech);
     this.cloneProfile.set(body.clone);
+    const face = document.querySelector("img.face") as HTMLImageElement;
+    const ansage = document.querySelector("audio.ansage") as HTMLAudioElement;
+    face.src = `${this.api}/klon/bild?t=${Date.now()}`;
+    ansage.src = `${this.api}/klon/ansage?t=${Date.now()}`;
+    const shifts = body.clone?.shifts || [];
+    ansage.ontimeupdate = () => {
+      if (!shifts.length || !ansage.duration) return;
+      const point = shifts[Math.min(shifts.length - 1, Math.floor((ansage.currentTime / ansage.duration) * shifts.length))];
+      face.style.transform = `translate(${point[0]}px, ${point[1]}px)`;
+    };
+    await ansage.play();
     const room = new Room();
     this.room = room;
     room.on(RoomEvent.TrackSubscribed, (track) => {
@@ -237,9 +251,16 @@ export class CallComponent {
     room.on(RoomEvent.DataReceived, (payload) => {
       this.status.set(new TextDecoder().decode(payload));
     });
-    await room.connect(body.url, body.token);
-    await room.localParticipant.setMicrophoneEnabled(true);
-    this.status.set("Im Raum. Der Klon spricht den Hinweis.");
+    const url = location.protocol === "https:" && body.url.startsWith("ws://")
+      ? `wss://${body.url.slice(5)}`
+      : body.url;
+    try {
+      await room.connect(url, body.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      this.status.set("Im Raum. Der Klon spricht den Hinweis.");
+    } catch {
+      this.status.set("Foto und Ansage laufen. Der LiveKit-Medienweg ist von außen zu.");
+    }
     this.busy.set(false);
   }
 }

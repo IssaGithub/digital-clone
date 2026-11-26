@@ -32,6 +32,7 @@ def view() -> dict:
             "movement": "Gesicht verschiebt sich mit dem Video" if profile.get("shifts") else "",
         },
         "pitch": profile.get("pitch", 50),
+        "shifts": profile.get("shifts") or [],
     }
 
 
@@ -40,6 +41,22 @@ def load() -> dict:
     if not path.is_file():
         return {}
     return json.loads(path.read_text())
+
+
+def jpeg() -> bytes:
+    raw = portrait()
+    if not raw or not shutil.which("ffmpeg"):
+        return b""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
+            "-s", "320x240", "-i", "pipe:0", "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1",
+        ],
+        input=raw,
+        capture_output=True,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else b""
 
 
 def portrait() -> bytes:

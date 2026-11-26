@@ -11,7 +11,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from livekit import api, rtc
 
 import avatar
@@ -31,7 +31,12 @@ SPEECH_KEY = os.environ.get("OPENAI_API_KEY", "")
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.environ.get("CALL_ORIGIN", "http://127.0.0.1:4200"), "http://168.119.242.47"],
+    allow_origins=[
+        os.environ.get("CALL_ORIGIN", "http://127.0.0.1:4200").split("/klon")[0],
+        "http://127.0.0.1:4200",
+        "http://168.119.242.47",
+        "https://168.119.242.47",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -137,6 +142,19 @@ def token():
         "speech": speech_status(),
         "clone": clone_store.view(),
     }
+
+
+@app.get("/klon/bild")
+def klon_bild():
+    image = clone_store.jpeg()
+    if not image:
+        raise HTTPException(status_code=404, detail="kein Foto")
+    return Response(image, media_type="image/jpeg")
+
+
+@app.get("/klon/ansage")
+def klon_ansage():
+    return Response(synthesize(DISCLOSURE), media_type="audio/wav")
 
 
 @app.post("/klon")
