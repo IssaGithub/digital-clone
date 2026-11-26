@@ -34,8 +34,46 @@ app.add_middleware(
 )
 
 
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "tiny")
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "espeak-ng")
+_whisper = None
+
+
+def local_mode() -> bool:
+    return os.environ.get("SPEECH_LOCAL") == "1"
+
+
+def ollama_ready() -> bool:
+    try:
+        response = httpx.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+        names = [item.get("name", "") for item in response.json().get("models", [])]
+    except Exception:
+        return False
+    return any(name == OLLAMA_MODEL or name.startswith(OLLAMA_MODEL.split(":")[0] + ":") for name in names)
+
+
+def local_tools_ready() -> bool:
+    return bool(shutil.which("espeak-ng")) and ollama_ready()
+
+
 def speech_status():
-    return oauth.speech_view()
+    if not local_mode():
+        return oauth.speech_view()
+    ready = local_tools_ready()
+    return {
+        "provider": "local",
+        "label": "Lokale Sprache",
+        "purpose": "STT und TTS",
+        "connected": ready,
+        "detail": "verbunden" if ready else "lokales Modell nicht bereit",
+        "login": None,
+        "loginHint": "",
+        "llm": OLLAMA_MODEL,
+        "stt": f"whisper-{WHISPER_MODEL}",
+        "tts": TTS_ENGINE,
+    }
 
 
 @app.get("/openai/login")
@@ -72,7 +110,14 @@ def token_for(identity: str) -> str:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "agent", "room": ROOM}
+    body = {"ok": True, "service": "agent", "room": ROOM}
+    if local_mode():
+        speech = speech_status()
+        body["ok"] = bool(speech["connected"])
+        body["llm"] = OLLAMA_MODEL
+        body["stt"] = f"whisper-{WHISPER_MODEL}"
+        body["tts"] = TTS_ENGINE
+    return body
 
 
 @app.get("/anschluesse")
@@ -90,9 +135,42 @@ def audio_bearer() -> str:
     return token
 
 
+def complete(prompt: str) -> str:
+    response = httpx.post(
+        f"{OLLAMA_URL}/api/generate",
+        json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+        timeout=120,
+    )
+    response.raise_for_status()
+    return str(response.json().get("response") or "").strip()
+
+
+def whisper_model():
+    global _whisper
+    if _whisper is None:
+        from faster_whisper import WhisperModel
+
+        _whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+    return _whisper
+
+
+def transcribe_local(wav: bytes) -> str:
+    folder = Path(tempfile.mkdtemp())
+    target = folder / "audio.wav"
+    target.write_bytes(wav)
+    segments, _info = whisper_model().transcribe(str(target), language="de")
+    text = " ".join(segment.text.strip() for segment in segments).strip()
+    shutil.rmtree(folder, ignore_errors=True)
+    return text
+
+
 def transcribe(wav: bytes) -> str:
+    if not wav:
+        return ""
+    if local_mode():
+        return transcribe_local(wav)
     speech_key = audio_bearer()
-    if not speech_key or not wav:
+    if not speech_key:
         return ""
     response = httpx.post(
         "https://api.openai.com/v1/audio/transcriptions",
@@ -106,6 +184,11 @@ def transcribe(wav: bytes) -> str:
 
 
 def synthesize(text: str) -> bytes:
+    if local_mode() and shutil.which("espeak-ng"):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "hinweis.wav"
+            subprocess.check_call(["espeak-ng", "-v", "de", "-s", "140", "-w", str(target), text])
+            return target.read_bytes()
     speech_key = audio_bearer()
     if speech_key:
         response = httpx.post(
@@ -161,6 +244,7 @@ async def play(source: rtc.AudioSource, wav: bytes):
 
 async def agent_loop():
     spoken: set[str] = set()
+    warmed = False
     room = rtc.Room()
 
     @room.on("participant_connected")
@@ -174,6 +258,12 @@ async def agent_loop():
         try:
             await room.connect(URL, token_for("klon"))
             print(f"Agent im Raum {ROOM}")
+            if local_mode() and not warmed:
+                warmed = True
+                asyncio.create_task(asyncio.to_thread(
+                    complete,
+                    "Antworte nur mit OK. Der gesprochene Hinweis bleibt der vorgegebene Klon-Hinweis.",
+                ))
             while room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
                 await asyncio.sleep(1)
         except Exception as error:
@@ -182,10 +272,17 @@ async def agent_loop():
 
 
 async def speak(room: rtc.Room):
-    source = rtc.AudioSource(48000, 1)
+    wav = await asyncio.to_thread(synthesize, DISCLOSURE)
+    raw = tempfile.SpooledTemporaryFile()
+    raw.write(wav)
+    raw.seek(0)
+    with wave.open(raw, "rb") as handle:
+        rate = handle.getframerate()
+        channels = handle.getnchannels()
+    source = rtc.AudioSource(rate, channels)
     track = rtc.LocalAudioTrack.create_audio_track("hinweis", source)
     await room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
-    await play(source, synthesize(DISCLOSURE))
+    await play(source, wav)
     await room.local_participant.publish_data(DISCLOSURE.encode(), reliable=True, topic="hinweis")
 
 
