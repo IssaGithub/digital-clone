@@ -10,7 +10,12 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from livekit import api, rtc
+
+import oauth
+
+oauth.load_env_files()
 
 DISCLOSURE = "Hinweis: In diesem Gespräch spricht ein digitaler Klon und keine natürliche Person."
 ROOM = os.environ.get("LIVEKIT_ROOM", "klon")
@@ -30,13 +35,32 @@ app.add_middleware(
 
 
 def speech_status():
-    return {
-        "provider": "openai",
-        "label": "OpenAI Sprache",
-        "purpose": "STT und TTS",
-        "connected": bool(SPEECH_KEY),
-        "detail": "angeschlossen" if SPEECH_KEY else "fehlender Anschluss",
-    }
+    return oauth.speech_view()
+
+
+@app.get("/openai/login")
+def openai_login():
+    return RedirectResponse(oauth.login_url())
+
+
+@app.get("/auth/callback")
+def auth_callback(code: str = "", state: str = "", client_id: str = "", error: str = ""):
+    target = os.environ.get("CALL_ORIGIN", "http://127.0.0.1:4200")
+    if error or not code or not state:
+        return RedirectResponse(target + "?openai=fehler")
+    granted = oauth.exchange_code(state, code, client_id)
+    access = granted.get("access_token") or ""
+    api_key = granted.get("api_key") or granted.get("openai_api_key") or ""
+    info = oauth.identity(access) if access else {}
+    oauth.save_grant(
+        api_key or access,
+        granted.get("refresh_token") or "",
+        int(granted.get("expires_in") or 3600),
+        str(info.get("email") or ""),
+        str(info.get("name") or ""),
+        str(info.get("sub") or "openai"),
+    )
+    return RedirectResponse(target + "?openai=angemeldet")
 
 
 def token_for(identity: str) -> str:
@@ -59,11 +83,32 @@ def token():
     return {"url": PUBLIC_URL, "room": ROOM, "token": token_for("kunde"), "speech": speech_status()}
 
 
+def audio_bearer() -> str:
+    token, _source = oauth.bearer()
+    return token
+
+
+def transcribe(wav: bytes) -> str:
+    speech_key = audio_bearer()
+    if not speech_key or not wav:
+        return ""
+    response = httpx.post(
+        "https://api.openai.com/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {speech_key}"},
+        files={"file": ("audio.wav", wav, "audio/wav")},
+        data={"model": "whisper-1"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return str(response.json().get("text") or "")
+
+
 def synthesize(text: str) -> bytes:
-    if SPEECH_KEY:
+    speech_key = audio_bearer()
+    if speech_key:
         response = httpx.post(
             "https://api.openai.com/v1/audio/speech",
-            headers={"Authorization": f"Bearer {SPEECH_KEY}"},
+            headers={"Authorization": f"Bearer {speech_key}"},
             json={"model": "tts-1", "voice": "alloy", "input": text, "response_format": "wav"},
             timeout=30,
         )

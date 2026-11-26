@@ -3,3 +3,5 @@ uvicorn==0.34.0
 livekit==1.0.13
 livekit-api==1.0.5
 httpx==0.28.1
+psycopg[binary]==3.2.9
+cryptography==44.0.2

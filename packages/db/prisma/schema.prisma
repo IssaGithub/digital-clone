@@ -17,6 +17,7 @@ enum ConnectionProvider {
   elevenlabs
   heygen
   llm
+  openai
 }
 
 enum MeetingLocationType {

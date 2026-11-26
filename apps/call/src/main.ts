@@ -15,9 +15,10 @@ type TokenResponse = { url: string; token: string; speech: Speech };
       <p>Der Klon tritt über LiveKit bei und spricht zuerst den Hinweis, dass ein digitaler Klon spricht.</p>
       <section class="card">
         <strong>{{ speech()?.label || "OpenAI Sprache" }}</strong>
-        <p [class.warn]="speech() && !speech()!.connected">
-          {{ speech()?.purpose }}: {{ speech()?.detail || "fehlender Anschluss" }}
+        <p [class.warn]="!speech()?.connected">
+          {{ speech()?.purpose || "STT und TTS" }}: {{ speech()?.detail || "fehlender Anschluss" }}
         </p>
+        <a [href]="loginHref">Mit OpenAI anmelden</a>
       </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
@@ -37,7 +38,14 @@ export class CallComponent {
       ? "http://127.0.0.1:4010"
       : `${location.origin}`;
     this.api = origin.includes(":4010") ? origin : `${location.origin}/klon-agent`;
+    this.loginHref = `${this.api}/openai/login`;
+    fetch(`${this.api}/anschluesse`)
+      .then((response) => response.json())
+      .then((body: { speech: Speech }) => this.speech.set(body.speech))
+      .catch(() => undefined);
   }
+
+  loginHref = "";
 
   private api: string;
 
