@@ -227,7 +227,7 @@ export class CallComponent {
           element.style.minHeight = "240px";
           element.style.background = "#111";
           element.style.borderRadius = "12px";
-          document.querySelector("video")?.replaceWith(element);
+          document.querySelector("video.call")?.replaceWith(element);
         } else {
           element.autoplay = true;
           document.body.append(element);
