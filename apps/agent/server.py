@@ -10,7 +10,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from livekit import api, rtc
 
 import oauth
@@ -40,6 +40,8 @@ def speech_status():
 
 @app.get("/openai/login")
 def openai_login():
+    if oauth.loopback_only():
+        return PlainTextResponse(oauth.speech_view()["loginHint"], status_code=200)
     return RedirectResponse(oauth.login_url())
 
 

@@ -3,7 +3,14 @@ import { Component, signal } from "@angular/core";
 import { bootstrapApplication } from "@angular/platform-browser";
 import { Room, RoomEvent, Track } from "livekit-client";
 
-type Speech = { label: string; purpose: string; connected: boolean; detail: string };
+type Speech = {
+  label: string;
+  purpose: string;
+  connected: boolean;
+  detail: string;
+  login?: string | null;
+  loginHint?: string;
+};
 type TokenResponse = { url: string; token: string; speech: Speech };
 
 @Component({
@@ -18,7 +25,12 @@ type TokenResponse = { url: string; token: string; speech: Speech };
         <p [class.warn]="!speech()?.connected">
           {{ speech()?.purpose || "STT und TTS" }}: {{ speech()?.detail || "fehlender Anschluss" }}
         </p>
-        <a [href]="loginHref">Mit OpenAI anmelden</a>
+        @if (loginHref) {
+          <a [href]="loginHref">Mit OpenAI anmelden</a>
+        }
+        @if (speech()?.loginHint) {
+          <p>{{ speech()?.loginHint }}</p>
+        }
       </section>
       <button type="button" (click)="join()" [disabled]="busy()">Gespräch starten</button>
       <p>{{ status() }}</p>
@@ -38,10 +50,12 @@ export class CallComponent {
       ? "http://127.0.0.1:4010"
       : `${location.origin}`;
     this.api = origin.includes(":4010") ? origin : `${location.origin}/klon-agent`;
-    this.loginHref = `${this.api}/openai/login`;
     fetch(`${this.api}/anschluesse`)
       .then((response) => response.json())
-      .then((body: { speech: Speech }) => this.speech.set(body.speech))
+      .then((body: { speech: Speech }) => {
+        this.speech.set(body.speech);
+        this.loginHref = body.speech.login ? `${this.api}${body.speech.login}` : "";
+      })
       .catch(() => undefined);
   }
 

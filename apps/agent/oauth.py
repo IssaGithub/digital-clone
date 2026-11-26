@@ -76,8 +76,21 @@ def client_id() -> str:
     return os.environ.get("OPENAI_OAUTH_CLIENT_ID") or "dynamic_agent_client"
 
 
+LOOPBACK_REDIRECT = "http://127.0.0.1:4010/auth/callback"
+
+
+def loopback_only() -> bool:
+    origin = os.environ.get("CALL_ORIGIN", "http://127.0.0.1:4200")
+    public = "127.0.0.1" not in origin and "localhost" not in origin
+    registered = os.environ.get("OPENAI_REDIRECT_REGISTERED") == "1"
+    return public and not registered
+
+
 def redirect_uri() -> str:
-    return os.environ.get("OPENAI_REDIRECT_URI", "http://127.0.0.1:4010/auth/callback")
+    configured = os.environ.get("OPENAI_REDIRECT_URI", "").strip()
+    if configured and os.environ.get("OPENAI_REDIRECT_REGISTERED") == "1":
+        return configured
+    return LOOPBACK_REDIRECT
 
 
 def b64url(data: bytes) -> str:
@@ -277,5 +290,11 @@ def speech_view() -> dict:
         "purpose": "STT und TTS",
         "connected": bool(token),
         "detail": detail,
-        "login": "/openai/login",
+        "login": None if loopback_only() else "/openai/login",
+        "loginHint": (
+            "OpenAI erlaubt nur http://127.0.0.1:4010/auth/callback. "
+            "Melde dich auf diesem Rechner unter http://127.0.0.1:4200 an."
+            if loopback_only()
+            else ""
+        ),
     }
