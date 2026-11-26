@@ -22,13 +22,14 @@ def view() -> dict:
     return {
         "ready": True,
         "label": "Eigener Klon",
+        "raw": {
+            "movement": "keine auswertbare Bewegung im Video" if not profile.get("shifts") else "",
+            "voiceClone": "keine Stimmkopie, nur Tonhöhe",
+        },
         "live": {
             "face": "Foto als Videobild im Raum",
             "voice": "lokales TTS mit der Tonhöhe der Stimmprobe",
-        },
-        "raw": {
-            "movement": "Videodatei gespeichert, Bewegung wird nicht auf das Gesicht übertragen",
-            "voiceClone": "keine Stimmkopie, nur Tonhöhe",
+            "movement": "Gesicht verschiebt sich mit dem Video" if profile.get("shifts") else "",
         },
         "pitch": profile.get("pitch", 50),
     }
@@ -53,6 +54,20 @@ def pitch() -> int:
     return max(0, min(99, value))
 
 
+def shifts() -> list:
+    refresh()
+    return load().get("shifts") or []
+
+
+def refresh() -> None:
+    profile = load()
+    video = ACTIVE / "video"
+    if not profile or profile.get("shifts") or not video.is_file():
+        return
+    profile["shifts"] = _shifts(video)
+    (ACTIVE / "profil.json").write_text(json.dumps(profile))
+
+
 def save(photo: bytes, voice: bytes, video: bytes) -> dict:
     if not photo or not voice or not video:
         raise RuntimeError("Video, Stimmprobe und Foto werden gebraucht")
@@ -68,13 +83,13 @@ def save(photo: bytes, voice: bytes, video: bytes) -> dict:
     wav = ACTIVE / "stimme.wav"
     _to_wav(ACTIVE / "stimme", wav)
     found = _pitch(wav)
+    motion = _shifts(ACTIVE / "video")
     (ACTIVE / "profil.json").write_text(json.dumps({
         "pitch": found,
+        "shifts": motion,
         "photoBytes": len(photo),
         "voiceBytes": len(voice),
         "videoBytes": len(video),
-        "live": ["foto", "tonhoehe"],
-        "raw": ["bewegung", "stimmkopie"],
     }))
     return view()
 
@@ -99,6 +114,49 @@ def _to_wav(source: Path, target: Path) -> None:
             target.write_bytes(source.read_bytes())
         return
     _run(["ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "16000", str(target)])
+
+
+def _shifts(video: Path) -> list:
+    if not shutil.which("ffmpeg"):
+        return []
+    raw = ACTIVE / "motion.raw"
+    try:
+        _run([
+            "ffmpeg", "-y", "-i", str(video),
+            "-vf", "fps=8,scale=32:24", "-frames:v", "64",
+            "-pix_fmt", "gray", "-f", "rawvideo", str(raw),
+        ])
+    except subprocess.CalledProcessError:
+        return []
+    data = raw.read_bytes()
+    raw.unlink(missing_ok=True)
+    size = 32 * 24
+    count = len(data) // size
+    if count < 2:
+        return []
+    frames = [data[i * size:(i + 1) * size] for i in range(count)]
+    points = []
+    for previous, current in zip(frames, frames[1:]):
+        mass = 0
+        sx = 0
+        sy = 0
+        for index, (left, right) in enumerate(zip(previous, current)):
+            delta = abs(left - right)
+            if delta < 18:
+                continue
+            mass += delta
+            sx += delta * (index % 32)
+            sy += delta * (index // 32)
+        if mass < 200:
+            points.append([0, 0])
+            continue
+        points.append([
+            max(-16, min(16, int((sx / mass - 16) / 2))),
+            max(-12, min(12, int((sy / mass - 12) / 2))),
+        ])
+    if not any(point != [0, 0] for point in points):
+        return []
+    return points
 
 
 def _pitch(wav_path: Path) -> int:

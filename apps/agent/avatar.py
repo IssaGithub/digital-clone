@@ -27,16 +27,24 @@ def _disc(buf: bytearray, cx: int, cy: int, rx: int, ry: int, color: Tuple[int, 
                 _put(buf, x, y, color)
 
 
-def face_frame(level: float) -> rtc.VideoFrame:
+def face_frame(level: float, shift=None) -> rtc.VideoFrame:
     photo = clone_store.portrait()
-    buf = bytearray(photo) if photo else bytearray(WIDTH * HEIGHT * 4)
-    if not photo:
-        _fill(buf, (28, 25, 21))
-        _disc(buf, 160, 118, 78, 96, (214, 176, 148))
-        _disc(buf, 128, 108, 10, 6, (40, 32, 28))
-        _disc(buf, 192, 108, 10, 6, (40, 32, 28))
-    open_px = 3 + int(max(0.0, min(level, 1.0)) * 22)
-    _disc(buf, 160, 176, 18, open_px, (120, 48, 52))
+    dx, dy = (shift or [0, 0])[:2]
+    buf = bytearray(b"\x1c\x19\x15\xff" * (WIDTH * HEIGHT))
+    if photo:
+        for y in range(HEIGHT):
+            source_y = y - int(dy)
+            if source_y < 0 or source_y >= HEIGHT:
+                continue
+            left = max(0, int(dx))
+            right = min(WIDTH, WIDTH + int(dx))
+            if left >= right:
+                continue
+            dest = (y * WIDTH + left) * 4
+            src = (source_y * WIDTH + left - int(dx)) * 4
+            buf[dest:dest + (right - left) * 4] = photo[src:src + (right - left) * 4]
+        open_px = 2 + int(max(0.0, min(level, 1.0)) * 10)
+        _disc(buf, 160 + int(dx), 176 + int(dy), 14, open_px, (90, 36, 40))
     return rtc.VideoFrame(WIDTH, HEIGHT, rtc.VideoBufferType.RGBA, buf)
 
 

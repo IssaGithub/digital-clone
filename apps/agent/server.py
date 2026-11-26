@@ -278,6 +278,8 @@ async def play(source: rtc.AudioSource, wav: bytes):
         pcm = handle.readframes(handle.getnframes())
     width = 2 * channels
     chunk = max(width, rate // 50 * width)
+    motion = clone_store.shifts()
+    shown = -1
     for start in range(0, len(pcm), chunk):
         piece = pcm[start : start + chunk]
         samples = len(piece) // width
@@ -285,8 +287,14 @@ async def play(source: rtc.AudioSource, wav: bytes):
             continue
         frame = rtc.AudioFrame(piece, rate, channels, samples)
         await source.capture_frame(frame)
-        if avatar_source is not None:
+        if avatar_source is not None and motion:
+            index = min(len(motion) - 1, int((start / max(len(pcm), 1)) * len(motion)))
+            if index != shown:
+                avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece), motion[index]))
+                shown = index
+        elif avatar_source is not None and shown < 0:
             avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece)))
+            shown = 0
         await asyncio.sleep(samples / rate)
     if avatar_source is not None:
         avatar_source.capture_frame(avatar.face_frame(0))
@@ -309,6 +317,8 @@ async def agent_loop():
             await room.connect(URL, token_for("klon"))
             print(f"Agent im Raum {ROOM}")
             await ensure_avatar(room)
+            for participant in list(room.remote_participants.values()):
+                on_join(participant)
             if local_mode() and not warmed:
                 warmed = True
                 asyncio.create_task(asyncio.to_thread(
@@ -323,6 +333,9 @@ async def agent_loop():
 
 
 async def speak(room: rtc.Room):
+    await ensure_avatar(room)
+    if avatar_source is not None:
+        avatar_source.capture_frame(avatar.face_frame(0, (clone_store.shifts() or [[0, 0]])[0]))
     wav = await asyncio.to_thread(synthesize, DISCLOSURE)
     raw = tempfile.SpooledTemporaryFile()
     raw.write(wav)

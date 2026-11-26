@@ -14,7 +14,7 @@ type Speech = {
 type CloneProfile = {
   ready: boolean;
   label: string;
-  live: { face?: string; voice?: string };
+  live: { face?: string; voice?: string; movement?: string };
   raw: { movement?: string; voiceClone?: string };
 };
 type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneProfile };
@@ -41,8 +41,8 @@ type TokenResponse = { url: string; token: string; speech: Speech; clone: CloneP
       <section class="card">
         <strong>{{ cloneProfile()?.label || "Noch kein Klon" }}</strong>
         @if (cloneProfile()?.ready) {
-          <p>Live: {{ cloneProfile()?.live?.face }}. {{ cloneProfile()?.live?.voice }}.</p>
-          <p class="warn">Roh: {{ cloneProfile()?.raw?.movement }}. {{ cloneProfile()?.raw?.voiceClone }}.</p>
+          <p>Live: {{ cloneProfile()?.live?.face }}. {{ cloneProfile()?.live?.voice }}. {{ cloneProfile()?.live?.movement }}</p>
+          <p class="warn">Roh: {{ cloneProfile()?.raw?.voiceClone }} {{ cloneProfile()?.raw?.movement }}</p>
         }
         <video class="preview" autoplay muted playsinline></video>
         <button type="button" (click)="takePhoto()" [disabled]="uploading()">Foto machen</button>
