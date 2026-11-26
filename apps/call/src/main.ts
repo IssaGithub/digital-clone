@@ -1,3 +1,4 @@
+import "zone.js";
 import { Component, signal } from "@angular/core";
 import { bootstrapApplication } from "@angular/platform-browser";
 import { Room, RoomEvent, Track } from "livekit-client";
@@ -10,6 +11,7 @@ type TokenResponse = { url: string; token: string; speech: Speech };
   template: `
     <main>
       <h1>Videocall</h1>
+      <p>LiveKit-Raum: klon</p>
       <p>Der Klon tritt über LiveKit bei und spricht zuerst den Hinweis, dass ein digitaler Klon spricht.</p>
       <section class="card">
         <strong>{{ speech()?.label || "OpenAI Sprache" }}</strong>
