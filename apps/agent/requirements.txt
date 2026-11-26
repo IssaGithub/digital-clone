@@ -6,3 +6,4 @@ httpx==0.28.1
 psycopg[binary]==3.2.9
 cryptography==44.0.2
 faster-whisper==1.1.1
+requests==2.32.3
