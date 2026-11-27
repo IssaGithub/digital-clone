@@ -47,6 +47,24 @@ class CloneStoreTest(unittest.TestCase):
         self.assertEqual(len(scaled), clone_store.WIDTH * clone_store.HEIGHT * 4)
         self.assertEqual(scaled[0:4], bytes((1, 2, 3, 255)))
 
+    def test_browser_webm_duration_without_container_duration(self):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            self.skipTest("ffmpeg fehlt")
+        path = Path(tempfile.mkdtemp(prefix="klon-webm-")) / "browser.webm"
+        result = subprocess.run(
+            [
+                "ffmpeg", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc=size=160x120:rate=8:duration=2",
+                "-f", "lavfi", "-i", "sine=frequency=180:duration=2",
+                "-shortest", "-c:v", "libvpx-vp9", "-c:a", "libopus",
+                "-f", "webm", "pipe:1",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        path.write_bytes(result.stdout)
+        self.assertGreater(clone_store._seconds(path), 1.8)
+
     def test_save_roundtrip_when_ffmpeg_exists(self):
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             self.skipTest("ffmpeg fehlt")

@@ -259,9 +259,37 @@ def _seconds(path: Path) -> float:
         check=False,
     )
     try:
-        return float(result.stdout.strip())
+        seconds = float(result.stdout.strip())
+        if seconds > 0:
+            return seconds
     except ValueError:
+        pass
+    # MediaRecorder schreibt WebM ohne abschließende Container-Dauer. Die
+    # Zeitstempel der Pakete bleiben aber vollständig und sind verlässlicher
+    # als Dateigröße oder Angaben aus dem Browser.
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_packets",
+            "-show_entries", "packet=pts_time,dts_time,duration_time",
+            "-of", "json", str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        packets = json.loads(result.stdout).get("packets") or []
+    except (json.JSONDecodeError, AttributeError):
         return -1
+    end = 0.0
+    for packet in packets:
+        try:
+            start = float(packet.get("pts_time", packet.get("dts_time", 0)))
+            duration = float(packet.get("duration_time", 0))
+        except (TypeError, ValueError):
+            continue
+        end = max(end, start + duration)
+    return end if end > 0 else -1
 
 
 def _shifts(video: Path) -> list:
