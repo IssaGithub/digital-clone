@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from livekit import api, rtc
@@ -144,12 +144,36 @@ def token():
     }
 
 
+def _clone_file(kind: str):
+    found = clone_store.blob(kind)
+    if found:
+        data, media = found
+        return Response(data, media_type=media, headers={"Cache-Control": "no-store"})
+    if kind == "foto":
+        image = clone_store.jpeg()
+        if image:
+            return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="noch keine Aufnahme")
+
+
 @app.get("/klon/bild")
 def klon_bild():
-    image = clone_store.jpeg()
-    if not image:
-        raise HTTPException(status_code=404, detail="kein Foto")
-    return Response(image, media_type="image/jpeg")
+    return _clone_file("foto")
+
+
+@app.get("/klon/foto")
+def klon_foto():
+    return _clone_file("foto")
+
+
+@app.get("/klon/stimme")
+def klon_stimme():
+    return _clone_file("stimme")
+
+
+@app.get("/klon/video")
+def klon_video():
+    return _clone_file("video")
 
 
 @app.get("/klon/ansage")
@@ -162,10 +186,15 @@ async def create_clone(
     photo: UploadFile = File(...),
     voice: UploadFile = File(...),
     video: UploadFile = File(...),
+    name: str = Form(""),
 ):
     try:
         return await asyncio.to_thread(
-            clone_store.save, await photo.read(), await voice.read(), await video.read()
+            clone_store.save,
+            await photo.read(),
+            await voice.read(),
+            await video.read(),
+            name,
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

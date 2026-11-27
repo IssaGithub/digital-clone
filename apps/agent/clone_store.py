@@ -5,9 +5,13 @@ import struct
 import subprocess
 import wave
 from pathlib import Path
+from typing import Optional, Tuple
 
 ROOT = Path(os.environ.get("CLONE_DIR", Path(__file__).resolve().parents[2] / "data" / "clones"))
 ACTIVE = ROOT / "aktiv"
+WIDTH = 640
+HEIGHT = 480
+_OLD = (320, 240)
 
 
 def view() -> dict:
@@ -15,24 +19,36 @@ def view() -> dict:
     if not profile:
         return {
             "ready": False,
+            "name": "",
             "label": "Noch kein Klon",
             "live": {},
             "raw": {},
+            "hints": [],
+            "shifts": [],
         }
+    motion = profile.get("shifts") or []
+    hints = []
+    if not motion:
+        hints.append("Im Video war wenig Bewegung. Eine neue Aufnahme mit leichter Kopfbewegung wirkt lebendiger.")
+    name = profile.get("name") or ""
     return {
         "ready": True,
-        "label": "Eigener Klon",
+        "name": name,
+        "label": name or "Eigener Klon",
         "raw": {
-            "movement": "keine auswertbare Bewegung im Video" if not profile.get("shifts") else "",
+            "movement": "" if motion else "keine auswertbare Bewegung im Video",
             "voiceClone": "keine Stimmkopie, nur Tonhöhe",
         },
         "live": {
-            "face": "Foto als Videobild im Raum",
-            "voice": "lokales TTS mit der Tonhöhe der Stimmprobe",
-            "movement": "Gesicht verschiebt sich mit dem Video" if profile.get("shifts") else "",
+            "face": "Foto als Bild im Gespräch",
+            "voice": "Stimme folgt der Tonhöhe deiner Probe",
+            "movement": "Leichte Bewegung aus dem Video" if motion else "",
         },
+        "hints": hints,
         "pitch": profile.get("pitch", 50),
-        "shifts": profile.get("shifts") or [],
+        "shifts": motion,
+        "voiceSeconds": profile.get("voiceSeconds"),
+        "videoSeconds": profile.get("videoSeconds"),
     }
 
 
@@ -44,13 +60,17 @@ def load() -> dict:
 
 
 def jpeg() -> bytes:
+    found = blob("foto")
+    if found and found[1].startswith("image/"):
+        return found[0]
     raw = portrait()
     if not raw or not shutil.which("ffmpeg"):
         return b""
     result = subprocess.run(
         [
             "ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
-            "-s", "320x240", "-i", "pipe:0", "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "pipe:1",
+            "-s", f"{WIDTH}x{HEIGHT}", "-i", "pipe:0", "-frames:v", "1",
+            "-q:v", "2", "-f", "image2", "-c:v", "mjpeg", "pipe:1",
         ],
         input=raw,
         capture_output=True,
@@ -59,10 +79,33 @@ def jpeg() -> bytes:
     return result.stdout if result.returncode == 0 else b""
 
 
+def blob(kind: str) -> Optional[Tuple[bytes, str]]:
+    filename = {"foto": "foto", "stimme": "stimme", "video": "video"}.get(kind)
+    if not filename:
+        return None
+    path = ACTIVE / filename
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    fallback = {"foto": "image/jpeg", "stimme": "audio/webm", "video": "video/webm"}[kind]
+    media = (load().get("types") or {}).get(kind) or fallback
+    if media == "application/octet-stream":
+        media = _sniff(data, fallback)
+    elif kind == "foto" and not str(media).startswith("image/"):
+        media = _sniff(data, fallback)
+    return data, media
+
+
 def portrait() -> bytes:
     path = ACTIVE / "portrait.rgba"
-    if path.is_file() and path.stat().st_size == 320 * 240 * 4:
-        return path.read_bytes()
+    if not path.is_file():
+        return b""
+    raw = path.read_bytes()
+    if len(raw) == WIDTH * HEIGHT * 4:
+        return raw
+    old_w, old_h = _OLD
+    if len(raw) == old_w * old_h * 4:
+        return _nearest(raw, old_w, old_h, WIDTH, HEIGHT)
     return b""
 
 
@@ -85,30 +128,103 @@ def refresh() -> None:
     (ACTIVE / "profil.json").write_text(json.dumps(profile))
 
 
-def save(photo: bytes, voice: bytes, video: bytes) -> dict:
+def check_parts(photo: bytes, voice: bytes, video: bytes) -> None:
     if not photo or not voice or not video:
-        raise RuntimeError("Video, Stimmprobe und Foto werden gebraucht")
+        raise RuntimeError("Foto, Stimmprobe und Video werden gebraucht.")
     if max(len(photo), len(voice), len(video)) > 40_000_000:
-        raise RuntimeError("Datei ist größer als 40 MB")
+        raise RuntimeError("Eine Datei ist größer als 40 MB.")
+    if len(photo) < 8_000:
+        raise RuntimeError("Das Foto ist zu klein.")
+    if len(voice) < 4_000:
+        raise RuntimeError("Die Stimmprobe ist zu kurz.")
+    if len(video) < 8_000:
+        raise RuntimeError("Das Video ist zu kurz.")
+
+
+def save(photo: bytes, voice: bytes, video: bytes, name: str = "") -> dict:
+    check_parts(photo, voice, video)
+    folder = ROOT / "neu"
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True)
+    try:
+        (folder / "foto").write_bytes(photo)
+        (folder / "stimme").write_bytes(voice)
+        (folder / "video").write_bytes(video)
+        try:
+            _portrait(folder / "foto", folder / "portrait.rgba")
+            wav = folder / "stimme.wav"
+            _to_wav(folder / "stimme", wav)
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError("Foto oder Ton ließ sich nicht verarbeiten.") from error
+        if shutil.which("ffmpeg") and not (folder / "portrait.rgba").is_file():
+            raise RuntimeError("Das Foto ließ sich nicht lesen. Bitte noch einmal aufnehmen.")
+        found = _pitch(wav)
+        motion = _shifts(folder / "video")
+        voice_seconds = _seconds(wav if wav.is_file() else folder / "stimme")
+        video_seconds = _seconds(folder / "video")
+        if voice_seconds >= 0 and voice_seconds < 3:
+            raise RuntimeError("Die Stimmprobe ist kürzer als 3 Sekunden.")
+        if video_seconds >= 0 and video_seconds < 4:
+            raise RuntimeError("Das Video ist kürzer als 4 Sekunden.")
+        (folder / "profil.json").write_text(json.dumps({
+            "name": _name(name),
+            "pitch": found,
+            "shifts": motion,
+            "photoBytes": len(photo),
+            "voiceBytes": len(voice),
+            "videoBytes": len(video),
+            "voiceSeconds": None if voice_seconds < 0 else round(voice_seconds, 2),
+            "videoSeconds": None if video_seconds < 0 else round(video_seconds, 2),
+            "types": {
+                "foto": _sniff(photo, "image/jpeg"),
+                "stimme": _sniff(voice, "audio/webm"),
+                "video": _sniff(video, "video/webm"),
+            },
+        }))
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     if ACTIVE.exists():
         shutil.rmtree(ACTIVE)
-    ACTIVE.mkdir(parents=True)
-    (ACTIVE / "foto").write_bytes(photo)
-    (ACTIVE / "stimme").write_bytes(voice)
-    (ACTIVE / "video").write_bytes(video)
-    _portrait(ACTIVE / "foto", ACTIVE / "portrait.rgba")
-    wav = ACTIVE / "stimme.wav"
-    _to_wav(ACTIVE / "stimme", wav)
-    found = _pitch(wav)
-    motion = _shifts(ACTIVE / "video")
-    (ACTIVE / "profil.json").write_text(json.dumps({
-        "pitch": found,
-        "shifts": motion,
-        "photoBytes": len(photo),
-        "voiceBytes": len(voice),
-        "videoBytes": len(video),
-    }))
+    folder.rename(ACTIVE)
     return view()
+
+
+def compose_portrait(photo: bytes, level: float = 0.0, shift=None) -> bytearray:
+    dx, dy = 0, 0
+    if shift:
+        dx = int(shift[0]) * WIDTH // 320
+        dy = int(shift[1]) * HEIGHT // 240
+    buf = bytearray(b"\x14\x12\x10\xff" * (WIDTH * HEIGHT))
+    if len(photo) != WIDTH * HEIGHT * 4:
+        return buf
+    _blit(buf, photo, dx, dy)
+    open_px = int(round(max(0.0, min(float(level), 1.0)) * 14))
+    if open_px:
+        _jaw(buf, open_px)
+    return buf
+
+
+def _name(name: str) -> str:
+    cleaned = "".join(ch for ch in name if ch >= " " and ch != "\x7f")
+    return " ".join(cleaned.split())[:80]
+
+
+def _sniff(data: bytes, fallback: str) -> str:
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data[:4] == b"\x1aE\xdf\xa3":
+        return fallback if "webm" in fallback else "video/webm"
+    if b"ftyp" in data[:16]:
+        return "video/mp4"
+    return fallback
 
 
 def _run(command: list) -> None:
@@ -120,7 +236,7 @@ def _portrait(source: Path, target: Path) -> None:
         return
     _run([
         "ffmpeg", "-y", "-i", str(source),
-        "-vf", "scale=320:240:force_original_aspect_ratio=increase,crop=320:240",
+        "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},unsharp=3:3:0.4",
         "-frames:v", "1", "-pix_fmt", "rgba", "-f", "rawvideo", str(target),
     ])
 
@@ -133,10 +249,25 @@ def _to_wav(source: Path, target: Path) -> None:
     _run(["ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "16000", str(target)])
 
 
+def _seconds(path: Path) -> float:
+    if not path.is_file() or not shutil.which("ffprobe"):
+        return -1
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return -1
+
+
 def _shifts(video: Path) -> list:
     if not shutil.which("ffmpeg"):
         return []
-    raw = ACTIVE / "motion.raw"
+    raw = video.parent / "motion.raw"
     try:
         _run([
             "ffmpeg", "-y", "-i", str(video),
@@ -197,3 +328,48 @@ def _pitch(wav_path: Path) -> int:
         return 50
     hz = rate / best_lag
     return max(0, min(99, int((hz - 80) / 170 * 99)))
+
+
+def _blit(buf: bytearray, photo: bytes, dx: int, dy: int) -> None:
+    for y in range(HEIGHT):
+        source_y = y - dy
+        if source_y < 0 or source_y >= HEIGHT:
+            continue
+        left = max(0, dx)
+        right = min(WIDTH, WIDTH + dx)
+        if left >= right:
+            continue
+        span = (right - left) * 4
+        dest = (y * WIDTH + left) * 4
+        src = (source_y * WIDTH + left - dx) * 4
+        buf[dest:dest + span] = photo[src:src + span]
+
+
+def _jaw(buf: bytearray, open_px: int) -> None:
+    src = bytes(buf)
+    mouth = int(HEIGHT * 0.62)
+    chin = int(HEIGHT * 0.82)
+    span = max(1, chin - mouth)
+    for y in range(mouth, HEIGHT):
+        if y < chin + open_px:
+            rel = (y - mouth) / (span + open_px)
+            source_y = mouth + int(rel * span)
+        else:
+            source_y = y - open_px
+        if source_y < 0 or source_y >= HEIGHT:
+            continue
+        start = y * WIDTH * 4
+        origin = source_y * WIDTH * 4
+        buf[start:start + WIDTH * 4] = src[origin:origin + WIDTH * 4]
+
+
+def _nearest(raw: bytes, sw: int, sh: int, dw: int, dh: int) -> bytes:
+    out = bytearray(dw * dh * 4)
+    for y in range(dh):
+        sy = min(sh - 1, y * sh // dh)
+        for x in range(dw):
+            sx = min(sw - 1, x * sw // dw)
+            src = (sy * sw + sx) * 4
+            dest = (y * dw + x) * 4
+            out[dest:dest + 4] = raw[src:src + 4]
+    return bytes(out)
