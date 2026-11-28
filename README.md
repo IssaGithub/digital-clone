@@ -4,7 +4,7 @@ Dashboard, Calendly-Webhook, Recall-Bot und ein eigener Voice-Dienst. Angebote b
 
 Öffentliche Seite eines Klons: `/klon/[id]`. Oben konfiguriert der eingeloggte Unternehmer Name, Wissen, Stimme, Preise, MCP-Server, Video-Briefing und Calendly. Darunter bucht jeder den Call. `github_project` bleibt nur im Datenmodell.
 
-Videocall über LiveKit statt Recall: Angular auf `http://127.0.0.1:4200`, Agent auf `http://127.0.0.1:4010`, LiveKit auf `ws://127.0.0.1:7880`. Im Klon Studio nimmst du Foto, Stimme und ein kurzes Video direkt im Browser auf, prüfst die Vorschau und legst den Klon danach an. Dafür gibt es keinen HeyGen-Aufruf. Ohne `OPENAI_API_KEY` bleibt OpenAI Sprache als fehlender Anschluss sichtbar. Der Agent spricht den Klon-Hinweis dann mit der Platzhalterstimme, in der Tonhöhe der Stimmprobe. Das Next-Dashboard bleibt, bis der neue Call läuft.
+Videocall über LiveKit statt Recall: Angular auf `http://127.0.0.1:4200`, Agent auf `http://127.0.0.1:4010`, LiveKit auf `ws://127.0.0.1:7880`. Im Klon Studio nimmst du Foto, Stimme und ein kurzes Video direkt im Browser auf, prüfst die Vorschau und legst den Klon danach an. Dafür gibt es keinen HeyGen-Aufruf. Mit `SPEECH_LOCAL=1` hört der Agent den Mikrofon-Track über LiveKit, transkribiert lokal mit Whisper und antwortet über eSpeak; ohne Ollama nutzt er kurze regelbasierte Antworten. Ohne lokale Sprachdienste und ohne OpenAI-Anmeldung bleibt Sprache als fehlender Anschluss sichtbar. Das Next-Dashboard bleibt, bis der neue Call läuft.
 
 ## Start
 

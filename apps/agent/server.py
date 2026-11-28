@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import os
 from typing import Optional
 import shutil
@@ -63,7 +64,7 @@ def ollama_ready() -> bool:
 
 
 def local_tools_ready() -> bool:
-    return bool(shutil.which("espeak-ng")) and ollama_ready()
+    return bool(shutil.which("espeak-ng")) and importlib.util.find_spec("faster_whisper") is not None
 
 
 def speech_status():
@@ -75,10 +76,10 @@ def speech_status():
         "label": "Lokale Sprache",
         "purpose": "STT und TTS",
         "connected": ready,
-        "detail": "verbunden" if ready else "lokales Modell nicht bereit",
+        "detail": "verbunden" if ready else "lokale Spracherkennung oder Sprachausgabe nicht bereit",
         "login": None,
         "loginHint": "",
-        "llm": OLLAMA_MODEL,
+        "llm": OLLAMA_MODEL if ollama_ready() else "regelbasierte lokale Antwort",
         "stt": f"whisper-{WHISPER_MODEL}",
         "tts": TTS_ENGINE,
     }
@@ -122,7 +123,7 @@ def health():
     if local_mode():
         speech = speech_status()
         body["ok"] = bool(speech["connected"])
-        body["llm"] = OLLAMA_MODEL
+        body["llm"] = speech["llm"]
         body["stt"] = f"whisper-{WHISPER_MODEL}"
         body["tts"] = TTS_ENGINE
     return body
@@ -206,6 +207,8 @@ def audio_bearer() -> str:
 
 
 def complete(prompt: str) -> str:
+    if not ollama_ready():
+        return ""
     response = httpx.post(
         f"{OLLAMA_URL}/api/generate",
         json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
@@ -225,12 +228,22 @@ def whisper_model():
 
 
 def transcribe_local(wav: bytes) -> str:
-    folder = Path(tempfile.mkdtemp())
-    target = folder / "audio.wav"
-    target.write_bytes(wav)
-    segments, _info = whisper_model().transcribe(str(target), language="de")
+    import numpy
+
+    with tempfile.SpooledTemporaryFile() as raw:
+        raw.write(wav)
+        raw.seek(0)
+        with wave.open(raw, "rb") as handle:
+            if (
+                handle.getnchannels() != 1
+                or handle.getsampwidth() != 2
+                or handle.getframerate() != 16000
+            ):
+                raise RuntimeError("Lokales STT erwartet WAV mit 16 kHz, mono und 16 Bit")
+            pcm = handle.readframes(handle.getnframes())
+    audio = numpy.frombuffer(pcm, dtype="<i2").astype(numpy.float32) / 32768.0
+    segments, _info = whisper_model().transcribe(audio, language="de")
     text = " ".join(segment.text.strip() for segment in segments).strip()
-    shutil.rmtree(folder, ignore_errors=True)
     return text
 
 
@@ -251,6 +264,24 @@ def transcribe(wav: bytes) -> str:
     )
     response.raise_for_status()
     return str(response.json().get("text") or "")
+
+
+def answer(text: str) -> str:
+    if ollama_ready():
+        prompt = (
+            "Du bist ein freundlicher digitaler Klon in einem Live-Gespräch. "
+            "Antworte auf Deutsch, knapp und natürlich in höchstens drei Sätzen.\n\n"
+            f"Nutzer: {text}\nKlon:"
+        )
+        generated = complete(prompt)
+        if generated:
+            return generated
+    lowered = text.casefold()
+    if any(word in lowered for word in ("hallo", "guten morgen", "guten tag", "guten abend")):
+        return "Hallo! Schön, dass du da bist. Wie kann ich dir helfen?"
+    if "wie geht" in lowered:
+        return "Danke, mir geht es gut. Wie kann ich dich heute unterstützen?"
+    return "Danke, ich habe dich verstanden. Erzähl mir bitte noch etwas mehr dazu."
 
 
 def synthesize(text: str) -> bytes:
@@ -317,6 +348,7 @@ async def ensure_avatar(room: rtc.Room):
 
 
 speaking = False
+conversation_lock = asyncio.Lock()
 
 
 async def keep_face_alive():
@@ -328,38 +360,163 @@ async def keep_face_alive():
 
 
 async def play(source: rtc.AudioSource, wav: bytes):
-    raw = tempfile.SpooledTemporaryFile()
-    raw.write(wav)
-    raw.seek(0)
-    with wave.open(raw, "rb") as handle:
-        rate = handle.getframerate()
-        channels = handle.getnchannels()
-        pcm = handle.readframes(handle.getnframes())
+    with tempfile.SpooledTemporaryFile() as raw:
+        raw.write(wav)
+        raw.seek(0)
+        with wave.open(raw, "rb") as handle:
+            rate = handle.getframerate()
+            channels = handle.getnchannels()
+            pcm = handle.readframes(handle.getnframes())
     width = 2 * channels
     chunk = max(width, rate // 50 * width)
     global speaking
     speaking = True
-    motion = clone_store.shifts()
-    shown = -1
-    for start in range(0, len(pcm), chunk):
-        piece = pcm[start : start + chunk]
-        samples = len(piece) // width
-        if samples == 0:
+    try:
+        motion = clone_store.shifts()
+        shown = -1
+        for start in range(0, len(pcm), chunk):
+            piece = pcm[start : start + chunk]
+            samples = len(piece) // width
+            if samples == 0:
+                continue
+            frame = rtc.AudioFrame(piece, rate, channels, samples)
+            await source.capture_frame(frame)
+            if avatar_source is not None and motion:
+                index = min(len(motion) - 1, int((start / max(len(pcm), 1)) * len(motion)))
+                if index != shown:
+                    avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece), motion[index]))
+                    shown = index
+            elif avatar_source is not None and shown < 0:
+                avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece)))
+                shown = 0
+            await asyncio.sleep(samples / rate)
+    finally:
+        speaking = False
+        if avatar_source is not None:
+            avatar_source.capture_frame(avatar.face_frame(0))
+
+
+def pcm_wav(pcm: bytes, rate: int = 16000) -> bytes:
+    with tempfile.SpooledTemporaryFile() as raw:
+        with wave.open(raw, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(rate)
+            handle.writeframes(pcm)
+        raw.seek(0)
+        return raw.read()
+
+
+def pcm_level(pcm: bytes) -> float:
+    if len(pcm) < 2:
+        return 0.0
+    samples = memoryview(pcm).cast("h")
+    return sum(abs(sample) for sample in samples) / len(samples) / 32768
+
+
+async def say(room: rtc.Room, text: str, topic: str = "antwort"):
+    wav = await asyncio.to_thread(synthesize, text)
+    with tempfile.SpooledTemporaryFile() as raw:
+        raw.write(wav)
+        raw.seek(0)
+        with wave.open(raw, "rb") as handle:
+            rate = handle.getframerate()
+            channels = handle.getnchannels()
+    source = rtc.AudioSource(rate, channels)
+    track = rtc.LocalAudioTrack.create_audio_track(topic, source)
+    publication = await room.local_participant.publish_track(
+        track,
+        rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+    )
+    try:
+        await play(source, wav)
+        await room.local_participant.publish_data(text.encode(), reliable=True, topic=topic)
+    finally:
+        await room.local_participant.unpublish_track(publication.sid)
+
+
+async def handle_utterance(room: rtc.Room, wav: bytes):
+    if conversation_lock.locked():
+        return
+    async with conversation_lock:
+        await room.local_participant.publish_data(
+            "Ich höre zu …".encode(), reliable=True, topic="status"
+        )
+        try:
+            text = await asyncio.to_thread(transcribe, wav)
+        except Exception as error:
+            print(f"Spracherkennung fehlgeschlagen: {error}")
+            await room.local_participant.publish_data(
+                "Die Spracherkennung ist fehlgeschlagen.".encode(),
+                reliable=True,
+                topic="status",
+            )
+            return
+        if not text:
+            await room.local_participant.publish_data(
+                "Ich habe nichts verstanden. Bitte sprich noch einmal.".encode(),
+                reliable=True,
+                topic="status",
+            )
+            return
+        await room.local_participant.publish_data(
+            f"Du: {text}".encode(), reliable=True, topic="transkript"
+        )
+        response = await asyncio.to_thread(answer, text)
+        await say(room, response)
+
+
+async def listen_to_track(room: rtc.Room, track: rtc.Track, identity: str):
+    print(f"Höre auf Mikrofon von {identity}")
+    stream = rtc.AudioStream(
+        track=track,
+        sample_rate=16000,
+        num_channels=1,
+        frame_size_ms=20,
+        capacity=200,
+    )
+    pre_roll: list[bytes] = []
+    utterance: list[bytes] = []
+    active = False
+    speech_ms = 0.0
+    silence_ms = 0.0
+    async for event in stream:
+        frame = event.frame
+        pcm = bytes(frame.data)
+        frame_ms = frame.samples_per_channel / max(frame.sample_rate, 1) * 1000
+        if speaking:
+            active = False
+            utterance.clear()
+            pre_roll.clear()
+            speech_ms = 0.0
+            silence_ms = 0.0
             continue
-        frame = rtc.AudioFrame(piece, rate, channels, samples)
-        await source.capture_frame(frame)
-        if avatar_source is not None and motion:
-            index = min(len(motion) - 1, int((start / max(len(pcm), 1)) * len(motion)))
-            if index != shown:
-                avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece), motion[index]))
-                shown = index
-        elif avatar_source is not None and shown < 0:
-            avatar_source.capture_frame(avatar.face_frame(avatar.level_from_pcm(piece)))
-            shown = 0
-        await asyncio.sleep(samples / rate)
-    speaking = False
-    if avatar_source is not None:
-        avatar_source.capture_frame(avatar.face_frame(0))
+        loud = pcm_level(pcm) >= 0.012
+        started = False
+        if not active:
+            pre_roll.append(pcm)
+            pre_roll = pre_roll[-10:]
+            if not loud:
+                continue
+            active = True
+            utterance.extend(pre_roll)
+            pre_roll.clear()
+            started = True
+        if not started:
+            utterance.append(pcm)
+        if loud:
+            speech_ms += frame_ms
+            silence_ms = 0.0
+        else:
+            silence_ms += frame_ms
+        utterance_ms = sum(len(piece) for piece in utterance) / 2 / 16000 * 1000
+        if (silence_ms >= 900 and speech_ms >= 350) or utterance_ms >= 15000:
+            audio = pcm_wav(b"".join(utterance))
+            asyncio.create_task(handle_utterance(room, audio))
+            active = False
+            utterance.clear()
+            speech_ms = 0.0
+            silence_ms = 0.0
 
 
 async def agent_loop():
@@ -374,6 +531,12 @@ async def agent_loop():
         spoken.add(participant.identity)
         asyncio.create_task(speak(room))
 
+    @room.on("track_subscribed")
+    def on_track(track, _publication, participant):
+        if participant.identity == "klon" or track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
+        asyncio.create_task(listen_to_track(room, track, participant.identity))
+
     while True:
         try:
             await room.connect(URL, token_for("klon"))
@@ -383,10 +546,7 @@ async def agent_loop():
                 on_join(participant)
             if local_mode() and not warmed:
                 warmed = True
-                asyncio.create_task(asyncio.to_thread(
-                    complete,
-                    "Antworte nur mit OK. Der gesprochene Hinweis bleibt der vorgegebene Klon-Hinweis.",
-                ))
+                asyncio.create_task(asyncio.to_thread(whisper_model))
             while room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
                 await asyncio.sleep(1)
         except Exception as error:
@@ -398,18 +558,8 @@ async def speak(room: rtc.Room):
     await ensure_avatar(room)
     if avatar_source is not None:
         avatar_source.capture_frame(avatar.face_frame(0, (clone_store.shifts() or [[0, 0]])[0]))
-    wav = await asyncio.to_thread(synthesize, DISCLOSURE)
-    raw = tempfile.SpooledTemporaryFile()
-    raw.write(wav)
-    raw.seek(0)
-    with wave.open(raw, "rb") as handle:
-        rate = handle.getframerate()
-        channels = handle.getnchannels()
-    source = rtc.AudioSource(rate, channels)
-    track = rtc.LocalAudioTrack.create_audio_track("hinweis", source)
-    await room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
-    await play(source, wav)
-    await room.local_participant.publish_data(DISCLOSURE.encode(), reliable=True, topic="hinweis")
+    async with conversation_lock:
+        await say(room, DISCLOSURE, "hinweis")
 
 
 async def amain():
